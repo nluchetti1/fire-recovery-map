@@ -14,11 +14,11 @@ from datetime import datetime
 FUEL_PATH = 'data/fuel_SE_final.tif' 
 IMAGE_DIR = 'public/images'
 
-# PLOT DOMAIN: Southeast US [West, South, East, North]
-# We use the wider SE domain you requested earlier
+# DOMAIN: Southeast US [West, South, East, North]
+# Wide view to catch TN/NC mountains and the coast
 PLOT_EXTENT = [-90, 24, -75, 37]
 
-# [cite_start]MOE Lookup (Anderson 1982 / NOAA TM-205) [cite: 234, 257]
+# MOE Lookup (Anderson 1982 / NOAA TM-205)
 MOE_LOOKUP = {
     1: 12, 2: 15, 3: 25, 4: 20, 5: 20, 6: 25, 7: 40,
     8: 30, 9: 25, 10: 25, 11: 15, 12: 20, 13: 25
@@ -80,23 +80,23 @@ def download_file(date_str, run, fhr):
         return None
 
 def generate_plot(recovery_grid, lats, lons, valid_time, fhr, run_str):
-    """Generates PNG map using Lambert Conformal (Better looking US map)."""
-    fig = plt.figure(figsize=(10, 8))
+    """Generates PNG map using Lambert Conformal."""
+    fig = plt.figure(figsize=(12, 10))
     
-    # --- PROJECTION FIX: Use Lambert Conformal ---
-    # This matches the style of your Hodograph script
-    ax = plt.axes(projection=ccrs.LambertConformal())
+    # Use Lambert Conformal (Standard for US Weather Maps)
+    # Using central params helps center the projection better
+    ax = plt.axes(projection=ccrs.LambertConformal(central_longitude=-96, central_latitude=39))
     
-    # Set the extent (Transforming the Lat/Lon box to Lambert)
+    # CRITICAL: Set the visible extent to the SE US
     ax.set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
 
     # Features
     ax.add_feature(cfeature.COASTLINE, linewidth=1)
     ax.add_feature(cfeature.BORDERS, linewidth=1)
     ax.add_feature(cfeature.STATES, linewidth=0.5, edgecolor='gray')
-    ax.add_feature(cfeature.OCEAN, facecolor='#e0f7fa') # Nice blue ocean background
+    ax.add_feature(cfeature.OCEAN, facecolor='#e0f7fa')
 
-    # [cite_start]Color Levels: Poor (<50), Fair (50-70), Good (70-95), Excellent (>95) [cite: 348-356]
+    # Color Levels
     levels = [0, 50, 70, 95, 200]
     colors = ['#d32f2f', '#ffa000', '#388e3c', '#1976d2'] 
     cmap = mcolors.ListedColormap(colors)
@@ -105,17 +105,19 @@ def generate_plot(recovery_grid, lats, lons, valid_time, fhr, run_str):
     # Mask invalid values
     plot_data = np.ma.masked_where((recovery_grid < 1) | (recovery_grid > 300), recovery_grid)
 
-    # Plot
-    # Note: transform must be PlateCarree because the Data is Lat/Lon
+    # Plot Data
+    # transform=ccrs.PlateCarree() is required because lats/lons are in degrees
     mesh = ax.pcolormesh(lons, lats, plot_data, cmap=cmap, norm=norm, 
                          transform=ccrs.PlateCarree(), shading='auto')
 
+    # Titles
     t_str = str(valid_time).split('T')[1][:5]
     d_str = str(valid_time).split('T')[0]
     plt.title(f"Nighttime Fuel Recovery\nValid: {d_str} {t_str}Z (F{fhr:02d})", loc='left', fontsize=12, fontweight='bold')
     plt.title(f"Run: {run_str}", loc='right', fontsize=10)
 
-    cbar = plt.colorbar(mesh, orientation='horizontal', pad=0.05, aspect=30, shrink=0.8)
+    # Colorbar
+    cbar = plt.colorbar(mesh, orientation='horizontal', pad=0.05, aspect=35, shrink=0.8)
     cbar.set_ticks([25, 60, 82.5, 147.5])
     cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'])
 
@@ -136,23 +138,21 @@ def main():
     fuel_grid_subset = None
     moe_grid_subset = None
 
-    # --- INDICES FOR SUBSETTING (WIDENED) ---
-    # We widen the box to ensure Western NC (-84W) is included.
-    # Previous x_min=1100 was too far East. 
-    # x=900 starts roughly at -95W, which is plenty safe.
-    y_min, y_max = 100, 800    # South-North 
-    x_min, x_max = 900, 1800   # West-East (Captures entire East Coast)
+    # --- DATA SLICING (WIDENED) ---
+    # We grab a huge chunk of data to ensure the map box is full.
+    # The map (ax.set_extent) will crop it visually later.
+    y_min, y_max = 50, 900    # South-North 
+    x_min, x_max = 700, 1800  # West-East (Widened left to catch mountains)
 
     for fhr in range(1, 19):
         grib = download_file(date_str, run_cycle, fhr)
         if not grib: continue
 
         try:
-            # Open GRIB
             ds = xr.open_dataset(grib, engine='cfgrib', 
                                  filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2})
             
-            # Subsetting using integer slicing
+            # Slice Data
             ds_sub = ds.isel(y=slice(y_min, y_max), x=slice(x_min, x_max))
             
             t_k = ds_sub['t2m'].values
@@ -165,7 +165,7 @@ def main():
             
             valid_time = ds_sub.valid_time.values
 
-            # --- ONE TIME SETUP ---
+            # --- ONE TIME FUEL SETUP ---
             if fuel_grid_subset is None:
                 fuel_grid_subset = sample_fuel_at_weather_points(FUEL_PATH, lats, lons)
                 moe_grid_subset = np.zeros_like(fuel_grid_subset, dtype=float)
