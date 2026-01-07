@@ -15,9 +15,10 @@ FUEL_PATH = 'data/fuel_SE_final.tif'
 IMAGE_DIR = 'public/images'
 
 # PLOT DOMAIN: Southeast US [West, South, East, North]
+# We use the wider SE domain you requested earlier
 PLOT_EXTENT = [-90, 24, -75, 37]
 
-# MOE Lookup (Anderson 1982 / NOAA TM-205)
+# [cite_start]MOE Lookup (Anderson 1982 / NOAA TM-205) [cite: 234, 257]
 MOE_LOOKUP = {
     1: 12, 2: 15, 3: 25, 4: 20, 5: 20, 6: 25, 7: 40,
     8: 30, 9: 25, 10: 25, 11: 15, 12: 20, 13: 25
@@ -79,18 +80,23 @@ def download_file(date_str, run, fhr):
         return None
 
 def generate_plot(recovery_grid, lats, lons, valid_time, fhr, run_str):
-    """Generates PNG map."""
+    """Generates PNG map using Lambert Conformal (Better looking US map)."""
     fig = plt.figure(figsize=(10, 8))
-    ax = plt.axes(projection=ccrs.PlateCarree())
     
-    # Use the lat/lon extent defined at the top
+    # --- PROJECTION FIX: Use Lambert Conformal ---
+    # This matches the style of your Hodograph script
+    ax = plt.axes(projection=ccrs.LambertConformal())
+    
+    # Set the extent (Transforming the Lat/Lon box to Lambert)
     ax.set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
 
+    # Features
     ax.add_feature(cfeature.COASTLINE, linewidth=1)
     ax.add_feature(cfeature.BORDERS, linewidth=1)
     ax.add_feature(cfeature.STATES, linewidth=0.5, edgecolor='gray')
+    ax.add_feature(cfeature.OCEAN, facecolor='#e0f7fa') # Nice blue ocean background
 
-    # Color Levels: Poor (<50), Fair (50-70), Good (70-95), Excellent (>95)
+    # [cite_start]Color Levels: Poor (<50), Fair (50-70), Good (70-95), Excellent (>95) [cite: 348-356]
     levels = [0, 50, 70, 95, 200]
     colors = ['#d32f2f', '#ffa000', '#388e3c', '#1976d2'] 
     cmap = mcolors.ListedColormap(colors)
@@ -99,6 +105,8 @@ def generate_plot(recovery_grid, lats, lons, valid_time, fhr, run_str):
     # Mask invalid values
     plot_data = np.ma.masked_where((recovery_grid < 1) | (recovery_grid > 300), recovery_grid)
 
+    # Plot
+    # Note: transform must be PlateCarree because the Data is Lat/Lon
     mesh = ax.pcolormesh(lons, lats, plot_data, cmap=cmap, norm=norm, 
                          transform=ccrs.PlateCarree(), shading='auto')
 
@@ -128,10 +136,12 @@ def main():
     fuel_grid_subset = None
     moe_grid_subset = None
 
-    # --- INDICES FOR SUBSETTING ---
-    # SE US subset indices to speed up processing
-    y_min, y_max = 200, 600   # South-North pixel indices
-    x_min, x_max = 1100, 1600 # West-East pixel indices
+    # --- INDICES FOR SUBSETTING (WIDENED) ---
+    # We widen the box to ensure Western NC (-84W) is included.
+    # Previous x_min=1100 was too far East. 
+    # x=900 starts roughly at -95W, which is plenty safe.
+    y_min, y_max = 100, 800    # South-North 
+    x_min, x_max = 900, 1800   # West-East (Captures entire East Coast)
 
     for fhr in range(1, 19):
         grib = download_file(date_str, run_cycle, fhr)
