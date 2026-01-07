@@ -1,10 +1,10 @@
 requests
 xarray
 rasterio
-folium
 numpy
 pandas
 matplotlib
 scipy
 cfgrib
 eccodes
+cartopy
