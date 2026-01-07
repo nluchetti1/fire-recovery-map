@@ -12,16 +12,39 @@ import matplotlib.colors as mcolors
 FUEL_PATH = 'data/fuel_SE_final.tif' 
 OUTPUT_HTML = 'public/index.html'
 
-# [cite_start]MOE Lookup based on Anderson (1982) & NOAA TM-205 [cite: 256, 290, 397]
+# MOE Lookup based on Anderson (1982) & NOAA TM-205
 MOE_LOOKUP = {
     1: 12, 2: 15, 3: 25, 4: 20, 5: 20, 6: 25, 7: 40,
     8: 30, 9: 25, 10: 25, 11: 15, 12: 20, 13: 25
 }
 
+def calculate_rh_from_dewpoint(t_kelvin, td_kelvin):
+    """
+    Calculates Relative Humidity (%) from Temperature and Dewpoint (Kelvin).
+    Uses the August-Roche-Magnus approximation.
+    """
+    # Convert to Celsius
+    t_c = t_kelvin - 273.15
+    td_c = td_kelvin - 273.15
+    
+    # Calculate Saturation Vapor Pressure (es)
+    # 6.112 * exp((17.67 * T) / (T + 243.5))
+    es = 6.112 * np.exp((17.67 * t_c) / (t_c + 243.5))
+    
+    # Calculate Actual Vapor Pressure (e)
+    # 6.112 * exp((17.67 * Td) / (Td + 243.5))
+    e = 6.112 * np.exp((17.67 * td_c) / (td_c + 243.5))
+    
+    # Calculate RH
+    rh = (e / es) * 100.0
+    
+    # Clip to valid range (0-100)
+    return np.clip(rh, 0, 100)
+
 def calculate_emc(T_degF, RH_percent):
     """
     Calculates 1-hr Equilibrium Moisture Content (EMC).
-    Uses standard Simard (1968) equations found in fire behavior systems.
+    Uses standard Simard (1968) equations.
     """
     h = np.clip(RH_percent, 0, 100)
     t = T_degF
@@ -55,7 +78,6 @@ def download_file(date_str, run, fhr):
     """
     Downloads HREF Mean product for a specific forecast hour.
     """
-    # HREF Mean contains the Ensemble Mean of T and RH
     base_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/href/prod/href.{date_str}/ensprod"
     filename = f"href.t{run}z.conus.mean.f{fhr:02d}.grib2"
     url = f"{base_url}/{filename}"
@@ -78,23 +100,17 @@ def download_file(date_str, run, fhr):
         return None
 
 def main():
-    print("--- Starting Fire Weather Recovery Map (Direct Download) ---")
+    print("--- Starting Fire Weather Recovery Map (Calc RH) ---")
     
     # 1. DETERMINE RUN TIME
-    # HREF runs available approx 3-4 hours after cycle time
     now = datetime.utcnow()
-    # Simple logic: If it's past 14:00 UTC, try 12Z. Else try 00Z.
+    # If past 14Z, use 12Z. Else 00Z.
     if now.hour >= 14:
         run_cycle = "12"
     else:
         run_cycle = "00"
     
-    # Date string YYYYMMDD
     date_str = now.strftime("%Y%m%d")
-    
-    # Fallback: If 12Z isn't on server yet (NOMADS can be slow), check previous day 12Z or 00Z?
-    # For simplicity, we assume the run exists. If 404, we could add retry logic for previous cycle.
-    
     print(f"Targeting HREF Run: {date_str} {run_cycle}Z")
 
     # 2. INITIALIZE MAP
@@ -105,7 +121,6 @@ def main():
     moe_grid_cached = None
 
     # 3. LOOP FORECAST HOURS (1 to 18)
-    # We download one file, process it, add to map, then delete it.
     for fhr in range(1, 19):
         grib_file = download_file(date_str, run_cycle, fhr)
         
@@ -114,35 +129,31 @@ def main():
             continue
 
         try:
-            # Open GRIB2 with xarray + cfgrib
-            # We filter for T2M and RH2M to speed up reading
+            # Open GRIB2
             ds = xr.open_dataset(
                 grib_file, 
                 engine='cfgrib', 
                 filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2}
             )
             
-            # Extract Data
-            # Note: GRIB var names often differ. HREF Mean usually uses:
-            # t2m = Temperature
-            # r2 = Relative Humidity
+            # Extract Vars
+            # GRIB variables: t2m (Temp), d2m (Dewpoint)
             t_k = ds['t2m'].values
-            rh = ds['r2'].values
+            d_k = ds['d2m'].values
             lats = ds.latitude.values
             lons = ds.longitude.values
             valid_time = ds.valid_time.values
             
+            # --- CALCULATE RH ---
+            # This fixes the "No variable named r2" error
+            rh = calculate_rh_from_dewpoint(t_k, d_k)
+
             # --- ONE TIME SETUP (Fuel Grid) ---
-            # We only sample the fuel grid once, the first time we get valid coordinates
             if fuel_grid_cached is None:
                 fuel_grid_cached = sample_fuel_grid(FUEL_PATH, lats, lons)
-                
-                # Build MOE Grid
                 moe_grid_cached = np.zeros_like(fuel_grid_cached, dtype=float)
                 for fid, moe_val in MOE_LOOKUP.items():
                     moe_grid_cached[fuel_grid_cached == fid] = moe_val
-                
-                # Mask non-fuel
                 moe_grid_cached[moe_grid_cached == 0] = 999 
                 moe_grid_cached[fuel_grid_cached > 13] = 999
             
@@ -155,7 +166,6 @@ def main():
             time_str = str(valid_time).split('T')[1][:5] + "Z"
             fg = folium.FeatureGroup(name=f"Hour {time_str} (+{fhr})", show=False)
             
-            # Subsample for web performance (Skip every 15 points)
             stride = 15
             count = 0
             
@@ -165,15 +175,12 @@ def main():
                     lat = lats[i, j]
                     lon = lons[i, j]
 
-                    # Domain Filter (Southeast Box)
                     if not (24 <= lat <= 38 and -90 <= lon <= -75):
                         continue
                         
-                    # Skip invalid/urban
                     if val <= 0.1 or val > 300: 
                         continue
 
-                    # Colors
                     if val < 50:
                         color, rating = '#d32f2f', 'POOR'   # Red
                     elif val < 70:
@@ -197,13 +204,12 @@ def main():
             fg.add_to(m)
             print(f"Processed f{fhr:02d}: Added {count} points.")
             
-            ds.close() # Close file handle
+            ds.close()
 
         except Exception as e:
             print(f"Error processing f{fhr:02d}: {e}")
         
         finally:
-            # CLEANUP: Delete the huge GRIB file
             if os.path.exists(grib_file):
                 os.remove(grib_file)
                 print(f"Deleted {grib_file}")
