@@ -3,17 +3,16 @@ import sys
 import numpy as np
 import xarray as xr
 import rasterio
-from herbie import Herbie
 import folium
-from datetime import datetime
+import requests
+from datetime import datetime, timedelta
 import matplotlib.colors as mcolors
 
 # --- CONFIGURATION ---
 FUEL_PATH = 'data/fuel_SE_final.tif' 
 OUTPUT_HTML = 'public/index.html'
 
-# MOE Lookup based on Anderson (1982) & NOAA TM-205
-# Key: Fuel Model (1-13), Value: Moisture of Extinction (%) [cite: 307]
+# [cite_start]MOE Lookup based on Anderson (1982) & NOAA TM-205 [cite: 256, 290, 397]
 MOE_LOOKUP = {
     1: 12, 2: 15, 3: 25, 4: 20, 5: 20, 6: 25, 7: 40,
     8: 30, 9: 25, 10: 25, 11: 15, 12: 20, 13: 25
@@ -42,126 +41,177 @@ def calculate_emc(T_degF, RH_percent):
 def sample_fuel_grid(fuel_path, target_lats, target_lons):
     """
     Probes the static Fuel TIFF at the weather grid coordinates.
-    Returns a grid of Fuel Models matching the shape of the weather data.
     """
+    print(f"Sampling fuel model from {fuel_path}...")
     with rasterio.open(fuel_path) as src:
-        # Flatten the weather grid arrays to a list of (x, y) points
-        # Note: Rasterio sample expects (x, y) -> (lon, lat)
+        # Flatten weather grid to list of (lon, lat)
         coords = zip(target_lons.ravel(), target_lats.ravel())
-        
-        # Sample the TIFF (this is very fast)
         sampled_values = src.sample(coords)
-        
-        # Extract values (generator to array)
         fuel_flat = np.fromiter((val[0] for val in sampled_values), dtype=np.uint8)
         
-    # Reshape back to the original weather grid shape
     return fuel_flat.reshape(target_lats.shape)
 
-def main():
-    print("--- Starting Fire Weather Recovery Map ---")
+def download_file(date_str, run, fhr):
+    """
+    Downloads HREF Mean product for a specific forecast hour.
+    """
+    # HREF Mean contains the Ensemble Mean of T and RH
+    base_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/href/prod/href.{date_str}/ensprod"
+    filename = f"href.t{run}z.conus.mean.f{fhr:02d}.grib2"
+    url = f"{base_url}/{filename}"
     
-    # 1. SETUP & WEATHER DOWNLOAD
-    now = datetime.utcnow()
-    # If before 14Z, use 00Z run; else 12Z run (simplified logic)
-    run_hour = 0 if now.hour < 14 else 12
-    dt = datetime(now.year, now.month, now.day, run_hour, 0)
-    print(f"Targeting HREF Run: {dt}")
-
-    # Initialize Herbie (Download Forecast Hours 1-18)
-    H = Herbie(dt, model='href', product='sfc', fxx=range(1, 19))
-
+    print(f"Downloading {filename}...")
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    
     try:
-        # Download Temp and RH (grib2 format)
-        ds_t = H.xarray("TMP:2 m above ground", remove_grib=True)
-        ds_rh = H.xarray("RH:2 m above ground", remove_grib=True)
+        with requests.get(url, stream=True, timeout=120, headers=headers) as r:
+            if r.status_code == 404:
+                print(f"404 Error: File not found {url}")
+                return None
+            r.raise_for_status()
+            with open(filename, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        return filename
     except Exception as e:
-        print(f"Weather download failed: {e}")
-        sys.exit(1)
+        print(f"Download failed: {e}")
+        return None
 
-    # 2. PREPARE FUEL DATA
-    print("Matching Fuel Data to Weather Grid...")
-    lats = ds_t.latitude.values
-    lons = ds_t.longitude.values
+def main():
+    print("--- Starting Fire Weather Recovery Map (Direct Download) ---")
     
-    # Create the Fuel Model Grid (this aligns your TIFF to the HREF grid)
-    fuel_grid = sample_fuel_grid(FUEL_PATH, lats, lons)
+    # 1. DETERMINE RUN TIME
+    # HREF runs available approx 3-4 hours after cycle time
+    now = datetime.utcnow()
+    # Simple logic: If it's past 14:00 UTC, try 12Z. Else try 00Z.
+    if now.hour >= 14:
+        run_cycle = "12"
+    else:
+        run_cycle = "00"
     
-    # Create MOE (Moisture of Extinction) Grid
-    moe_grid = np.zeros_like(fuel_grid, dtype=float)
-    for fid, moe_val in MOE_LOOKUP.items():
-        moe_grid[fuel_grid == fid] = moe_val
+    # Date string YYYYMMDD
+    date_str = now.strftime("%Y%m%d")
     
-    # Mask invalid areas (Urban/Water/Snow are often 90-99 in Landfire)
-    # Set them to infinity so the recovery ratio becomes 0
-    moe_grid[moe_grid == 0] = 999 
-    moe_grid[fuel_grid > 13] = 999
+    # Fallback: If 12Z isn't on server yet (NOMADS can be slow), check previous day 12Z or 00Z?
+    # For simplicity, we assume the run exists. If 404, we could add retry logic for previous cycle.
+    
+    print(f"Targeting HREF Run: {date_str} {run_cycle}Z")
 
-    # 3. BUILD MAP
+    # 2. INITIALIZE MAP
     m = folium.Map(location=[34, -84], zoom_start=6, tiles='CartoDB dark_matter')
-    
-    # Define Colors for Ratings (NOAA TM-205 Page 10) [cite: 345]
-    # Poor (<50%), Fair (51-70%), Good (71-95%), Excellent (>95%)
-    # Colors: Red, Orange, LightGreen, Blue
-    
-    # Loop through each forecast hour
-    for step_idx in range(ds_t.step.size):
-        # Get Weather Data for this hour
-        t_k = ds_t['t2m'].isel(step=step_idx).values
-        rh = ds_rh['r2'].isel(step=step_idx).values
-        valid_time = ds_t.valid_time.isel(step=step_idx).values
-        time_str = str(valid_time).split('T')[1][:5] + "Z"
-        
-        # Convert T to Fahrenheit
-        t_f = (t_k - 273.15) * 9/5 + 32
-        
-        # Calculate Fuel Moisture
-        fm_grid = calculate_emc(t_f, rh)
-        
-        # Calculate Recovery Ratio (%)
-        recovery_grid = (fm_grid / moe_grid) * 100
-        
-        # --- Visualization (Subsampling for Performance) ---
-        fg = folium.FeatureGroup(name=f"Hour {time_str}", show=False)
-        
-        # Skip every 15 points to keep the web map fast
-        stride = 15
-        
-        for i in range(0, lats.shape[0], stride):
-            for j in range(0, lats.shape[1], stride):
-                val = recovery_grid[i, j]
-                
-                # Skip invalid data (urban/water)
-                if val <= 0.1: continue
-                
-                # Assign Rating & Color [cite: 345]
-                if val < 50:
-                    color, rating = '#d32f2f', 'POOR'  # Red
-                elif val < 70:
-                    color, rating = '#ff9800', 'FAIR'  # Orange
-                elif val < 95:
-                    color, rating = '#4caf50', 'GOOD'  # Green
-                else:
-                    color, rating = '#2196f3', 'EXCELLENT' # Blue
-
-                # Add Dot
-                folium.Circle(
-                    location=[lats[i,j], lons[i,j]],
-                    radius=2500, # 2.5km dot
-                    color=color,
-                    fill=True,
-                    fill_opacity=0.5,
-                    weight=0,
-                    tooltip=f"<b>Time:</b> {time_str}<br><b>Rating:</b> {rating}<br><b>Recovery:</b> {val:.0f}%"
-                ).add_to(fg)
-                
-        fg.add_to(m)
-
     folium.LayerControl().add_to(m)
     
+    fuel_grid_cached = None
+    moe_grid_cached = None
+
+    # 3. LOOP FORECAST HOURS (1 to 18)
+    # We download one file, process it, add to map, then delete it.
+    for fhr in range(1, 19):
+        grib_file = download_file(date_str, run_cycle, fhr)
+        
+        if not grib_file:
+            print(f"Skipping hour f{fhr:02d} (Download failed)")
+            continue
+
+        try:
+            # Open GRIB2 with xarray + cfgrib
+            # We filter for T2M and RH2M to speed up reading
+            ds = xr.open_dataset(
+                grib_file, 
+                engine='cfgrib', 
+                filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2}
+            )
+            
+            # Extract Data
+            # Note: GRIB var names often differ. HREF Mean usually uses:
+            # t2m = Temperature
+            # r2 = Relative Humidity
+            t_k = ds['t2m'].values
+            rh = ds['r2'].values
+            lats = ds.latitude.values
+            lons = ds.longitude.values
+            valid_time = ds.valid_time.values
+            
+            # --- ONE TIME SETUP (Fuel Grid) ---
+            # We only sample the fuel grid once, the first time we get valid coordinates
+            if fuel_grid_cached is None:
+                fuel_grid_cached = sample_fuel_grid(FUEL_PATH, lats, lons)
+                
+                # Build MOE Grid
+                moe_grid_cached = np.zeros_like(fuel_grid_cached, dtype=float)
+                for fid, moe_val in MOE_LOOKUP.items():
+                    moe_grid_cached[fuel_grid_cached == fid] = moe_val
+                
+                # Mask non-fuel
+                moe_grid_cached[moe_grid_cached == 0] = 999 
+                moe_grid_cached[fuel_grid_cached > 13] = 999
+            
+            # --- CALCULATE RECOVERY ---
+            t_f = (t_k - 273.15) * 9/5 + 32
+            fm_grid = calculate_emc(t_f, rh)
+            recovery_grid = (fm_grid / moe_grid_cached) * 100
+            
+            # --- ADD TO MAP ---
+            time_str = str(valid_time).split('T')[1][:5] + "Z"
+            fg = folium.FeatureGroup(name=f"Hour {time_str} (+{fhr})", show=False)
+            
+            # Subsample for web performance (Skip every 15 points)
+            stride = 15
+            count = 0
+            
+            for i in range(0, lats.shape[0], stride):
+                for j in range(0, lats.shape[1], stride):
+                    val = recovery_grid[i, j]
+                    lat = lats[i, j]
+                    lon = lons[i, j]
+
+                    # Domain Filter (Southeast Box)
+                    if not (24 <= lat <= 38 and -90 <= lon <= -75):
+                        continue
+                        
+                    # Skip invalid/urban
+                    if val <= 0.1 or val > 300: 
+                        continue
+
+                    # Colors
+                    if val < 50:
+                        color, rating = '#d32f2f', 'POOR'   # Red
+                    elif val < 70:
+                        color, rating = '#ff9800', 'FAIR'   # Orange
+                    elif val < 95:
+                        color, rating = '#4caf50', 'GOOD'   # Green
+                    else:
+                        color, rating = '#2196f3', 'EXCELLENT' # Blue
+                    
+                    folium.Circle(
+                        location=[lat, lon],
+                        radius=2500,
+                        color=color,
+                        fill=True,
+                        fill_opacity=0.6,
+                        weight=0,
+                        tooltip=f"<b>Time:</b> {time_str}<br><b>Rating:</b> {rating}<br><b>Recovery:</b> {val:.0f}%"
+                    ).add_to(fg)
+                    count += 1
+            
+            fg.add_to(m)
+            print(f"Processed f{fhr:02d}: Added {count} points.")
+            
+            ds.close() # Close file handle
+
+        except Exception as e:
+            print(f"Error processing f{fhr:02d}: {e}")
+        
+        finally:
+            # CLEANUP: Delete the huge GRIB file
+            if os.path.exists(grib_file):
+                os.remove(grib_file)
+                print(f"Deleted {grib_file}")
+
+    # 4. SAVE OUTPUT
     os.makedirs('public', exist_ok=True)
     m.save(OUTPUT_HTML)
-    print("Map generated successfully in public/index.html")
+    print("Map generation complete.")
 
 if __name__ == "__main__":
     main()
