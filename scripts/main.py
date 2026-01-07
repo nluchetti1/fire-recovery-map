@@ -55,7 +55,7 @@ def get_domain_slice(ds, extent):
     return slice(y_min, y_max), slice(x_min, x_max)
 
 def calculate_rh(t_kelvin, d_kelvin):
-    [cite_start]"""Calculates RH from Temp and Dewpoint[cite: 508]."""
+    """Calculates RH from Temp and Dewpoint."""
     t_c = t_kelvin - 273.15
     d_c = d_kelvin - 273.15
     es = 6.112 * np.exp((17.67 * t_c) / (t_c + 243.5))
@@ -63,7 +63,7 @@ def calculate_rh(t_kelvin, d_kelvin):
     return np.clip((e / es) * 100.0, 0, 100)
 
 def calculate_emc(T_degF, RH_percent):
-    [cite_start]"""Calculates Fuel Moisture (Simard 1968)[cite: 279, 403]."""
+    """Calculates Fuel Moisture (Simard 1968)."""
     h = np.clip(RH_percent, 0, 100)
     t = T_degF
     
@@ -130,7 +130,7 @@ def generate_plot(recovery_grid, lats, lons, valid_time, fhr, run_str):
     ax.add_feature(cfeature.STATES, linewidth=0.5, edgecolor='gray')
     ax.add_feature(cfeature.OCEAN, facecolor='#e0f7fa')
 
-    # [cite_start]Color Levels [cite: 348-356]
+    # Color Levels
     levels = [0, 50, 70, 95, 200]
     colors = ['#d32f2f', '#ffa000', '#388e3c', '#1976d2'] 
     cmap = mcolors.ListedColormap(colors)
