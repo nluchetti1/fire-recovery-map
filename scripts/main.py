@@ -13,8 +13,9 @@ from datetime import datetime
 # --- CONFIGURATION ---
 FUEL_PATH = 'data/fuel_SE_final.tif' 
 IMAGE_DIR = 'public/images'
-# Domain for the PLOT (Southeast US)
-# [West, South, East, North]
+
+# DOMAIN: Southeast US [West, South, East, North]
+# This clips the data AND sets the map view
 PLOT_EXTENT = [-90, 24, -75, 37]
 
 # MOE Lookup (Anderson 1982 / NOAA TM-205)
@@ -51,25 +52,20 @@ def calculate_emc(T_degF, RH_percent):
 def sample_fuel_at_weather_points(fuel_path, weather_lats, weather_lons):
     """
     Probes the fuel map at every weather grid point.
-    Returns a grid of Fuel Models matching the Weather Grid shape.
     """
     print("Sampling Fuel Map at Weather Grid Points...")
     with rasterio.open(fuel_path) as src:
-        # rasterio.sample expects list of (x, y) coordinates
-        # We assume the Fuel Map is WGS84 (EPSG:4326) so x=Lon, y=Lat
-        
-        # Flatten the arrays to loops
+        # Flatten arrays for sampling
         flat_lons = weather_lons.ravel()
         flat_lats = weather_lats.ravel()
         coords = zip(flat_lons, flat_lats)
         
-        # Sample (this is fast)
+        # Sample (returns generator)
         sampled = src.sample(coords)
         
-        # Convert generator to numpy array
+        # Convert to numpy array
         fuel_flat = np.fromiter((val[0] for val in sampled), dtype=np.uint8)
         
-    # Reshape back to the weather grid dimensions
     return fuel_flat.reshape(weather_lats.shape)
 
 def download_file(date_str, run, fhr):
@@ -91,33 +87,34 @@ def download_file(date_str, run, fhr):
         return None
 
 def generate_plot(recovery_grid, lats, lons, valid_time, fhr, run_str):
-    """Generates a static PNG map using Cartopy."""
+    """Generates a static PNG map zoomed into the SE US."""
     fig = plt.figure(figsize=(10, 8))
     
-    # Cartopy Projection
+    # Use PlateCarree (standard lat/lon)
     ax = plt.axes(projection=ccrs.PlateCarree())
-    ax.set_extent(PLOT_EXTENT)
+    
+    # FORCE THE EXTENT (Zoom in)
+    ax.set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
 
     # Add Map Features
     ax.add_feature(cfeature.COASTLINE, linewidth=1)
     ax.add_feature(cfeature.BORDERS, linewidth=1)
     ax.add_feature(cfeature.STATES, linewidth=0.5, edgecolor='gray')
 
-    # Color Levels for Recovery (Poor, Fair, Good, Excellent)
-    # 0-50 (Poor), 50-70 (Fair), 70-95 (Good), 95+ (Excellent)
+    # Color Levels: Poor (<50), Fair (50-70), Good (70-95), Excellent (>95)
     levels = [0, 50, 70, 95, 200]
     colors = ['#d32f2f', '#ffa000', '#388e3c', '#1976d2'] # Red, Orange, Green, Blue
     cmap = mcolors.ListedColormap(colors)
     norm = mcolors.BoundaryNorm(levels, len(colors))
 
-    # Mask out "Infinite" recovery (non-fuel areas)
-    plot_data = np.ma.masked_where(recovery_grid > 300, recovery_grid)
+    # Mask invalid data (where recovery is 0 or crazy high)
+    plot_data = np.ma.masked_where((recovery_grid < 1) | (recovery_grid > 300), recovery_grid)
 
-    # Plot Data using pcolormesh
+    # Plot
     mesh = ax.pcolormesh(lons, lats, plot_data, cmap=cmap, norm=norm, 
                          transform=ccrs.PlateCarree(), shading='auto')
 
-    # Title & Labels
+    # Labels
     t_str = str(valid_time).split('T')[1][:5]
     d_str = str(valid_time).split('T')[0]
     plt.title(f"Nighttime Fuel Recovery\nValid: {d_str} {t_str}Z (F{fhr:02d})", loc='left', fontsize=12, fontweight='bold')
@@ -140,75 +137,73 @@ def main():
     
     # 1. Setup Time
     now = datetime.utcnow()
-    # Simple logic: After 2PM UTC (0900 EST), look for 12Z run. Otherwise 00Z.
     run_cycle = "12" if now.hour >= 14 else "00"
     date_str = now.strftime("%Y%m%d")
     run_info = f"{date_str} {run_cycle}Z"
     
-    fuel_grid_cached = None
-    moe_grid_cached = None
+    fuel_grid_subset = None
+    moe_grid_subset = None
     
-    # 2. Loop Forecast Hours (1-18)
+    # 2. Loop Forecast Hours
     for fhr in range(1, 19):
         grib = download_file(date_str, run_cycle, fhr)
-        if not grib: 
-            print("Trying Previous Day if current run is missing...")
-            # Fallback logic could go here, for now just skip
-            continue
+        if not grib: continue
 
         try:
             # Load Weather Data
-            # Note: cfgrib might return multiple datasets if stepTypes mix.
-            # We filter for 'heightAboveGround' and level 2 to catch T2m/D2m
             ds = xr.open_dataset(grib, engine='cfgrib', 
                                  filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2})
             
-            t_k = ds['t2m'].values
-            d_k = ds['d2m'].values
-            lats = ds.latitude.values
-            lons = ds.longitude.values
-            valid_time = ds.valid_time.values
+            # --- CRITICAL FIX: SUBSET DATA TO DOMAIN ---
+            # This makes plotting faster AND fixes the zoom issue
+            # We add a buffer of 1 degree to ensure full coverage
+            min_lon = PLOT_EXTENT[0] + 360 # Convert -90 to 270 for slicing GRIB
+            max_lon = PLOT_EXTENT[2] + 360
+            min_lat = PLOT_EXTENT[1]
+            max_lat = PLOT_EXTENT[3]
             
-            # --- ONE TIME SETUP (Fuel Grid) ---
-            # We sample the fuel map ONCE, using the Weather Grid's shape.
-            if fuel_grid_cached is None:
-                fuel_grid_cached = sample_fuel_at_weather_points(FUEL_PATH, lats, lons)
-                
-                # Build MOE Grid
-                moe_grid_cached = np.zeros_like(fuel_grid_cached, dtype=float)
-                for fid, moe_val in MOE_LOOKUP.items():
-                    moe_grid_cached[fuel_grid_cached == fid] = moe_val
-                
-                # Handle Non-Fuel Areas (Urban/Water/Snow > 13)
-                moe_grid_cached[moe_grid_cached == 0] = 999 
-                moe_grid_cached[fuel_grid_cached > 13] = 999
+            # Slice the dataset (much faster than processing full CONUS)
+            ds_sub = ds.sel(latitude=slice(max_lat, min_lat), longitude=slice(min_lon, max_lon))
+            
+            # Extract Vars
+            t_k = ds_sub['t2m'].values
+            d_k = ds_sub['d2m'].values
+            lats = ds_sub.latitude.values
+            
+            # FIX LONGITUDE: Convert 270 -> -90
+            lons_raw = ds_sub.longitude.values
+            lons = np.where(lons_raw > 180, lons_raw - 360, lons_raw)
+            
+            valid_time = ds_sub.valid_time.values
 
-            # --- CALCULATIONS ---
-            # 1. Relative Humidity
+            # --- ONE TIME SETUP (Fuel Grid) ---
+            if fuel_grid_subset is None:
+                # Sample using the NEW subset coordinates
+                fuel_grid_subset = sample_fuel_at_weather_points(FUEL_PATH, lats, lons)
+                
+                moe_grid_subset = np.zeros_like(fuel_grid_subset, dtype=float)
+                for fid, moe_val in MOE_LOOKUP.items():
+                    moe_grid_subset[fuel_grid_subset == fid] = moe_val
+                
+                moe_grid_subset[moe_grid_subset == 0] = 999 
+                moe_grid_subset[fuel_grid_subset > 13] = 999
+
+            # --- CALCULATION & PLOTTING ---
             rh = calculate_rh(t_k, d_k)
-            
-            # 2. Fuel Moisture (EMC)
             t_f = (t_k - 273.15) * 9/5 + 32
             fm = calculate_emc(t_f, rh)
+            recovery = (fm / moe_grid_subset) * 100
             
-            # 3. Recovery Ratio
-            recovery = (fm / moe_grid_cached) * 100
-            
-            # --- PLOTTING ---
             generate_plot(recovery, lats, lons, valid_time, fhr, run_info)
             
             ds.close()
 
         except Exception as e:
-            print(f"Error processing f{fhr:02d}: {e}")
-        
+            print(f"Error f{fhr:02d}: {e}")
         finally:
-            # Delete GRIB file to save space
-            if os.path.exists(grib): 
-                os.remove(grib)
+            if os.path.exists(grib): os.remove(grib)
 
 if __name__ == "__main__":
-    # Force Matplotlib to run without a display (Server Mode)
     import matplotlib
-    matplotlib.use('Agg') 
+    matplotlib.use('Agg')
     main()
