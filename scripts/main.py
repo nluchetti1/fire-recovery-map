@@ -14,9 +14,9 @@ from datetime import datetime
 FUEL_PATH = 'data/fuel_SE_final.tif' 
 IMAGE_DIR = 'public/images'
 
-# DOMAIN: Tight zoom on the Carolinas/GA/VA
+# DOMAIN: Southeast US (Zoomed on Carolinas/VA/GA)
 # [West, East, South, North]
-PLOT_EXTENT = [-85.0, -75.0, 31.0, 37.0] 
+PLOT_EXTENT = [-85.0, -75.0, 31.0, 37.5] 
 
 # MOE Lookup
 MOE_LOOKUP = {
@@ -31,8 +31,8 @@ def get_domain_slice(ds, extent):
     lons = np.where(lons > 180, lons - 360, lons)
     
     mask = (
-        (lons >= extent[0] - 2.0) & (lons <= extent[1] + 2.0) &
-        (lats >= extent[2] - 2.0) & (lats <= extent[3] + 2.0)
+        (lons >= extent[0] - 1.0) & (lons <= extent[1] + 1.0) &
+        (lats >= extent[2] - 1.0) & (lats <= extent[3] + 1.0)
     )
     
     rows, cols = np.where(mask)
@@ -107,22 +107,25 @@ def generate_plot(recovery_grid, lats, lons, valid_time, fhr, run_str):
     ax.set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
 
     # Features
-    ax.add_feature(cfeature.COASTLINE, linewidth=1.5)
-    ax.add_feature(cfeature.BORDERS, linewidth=1.5)
-    ax.add_feature(cfeature.STATES, linewidth=1.0, edgecolor='black')
-    
-    # Levels and Colors
+    ax.add_feature(cfeature.COASTLINE, linewidth=1.5, zorder=10)
+    ax.add_feature(cfeature.BORDERS, linewidth=1.5, zorder=10)
+    ax.add_feature(cfeature.STATES, linewidth=1.0, edgecolor='black', zorder=10)
+    # Add a land background so transparent areas (Urban/No Data) look nice
+    ax.add_feature(cfeature.LAND, facecolor='#f0f0f0') 
+    ax.add_feature(cfeature.OCEAN, facecolor='#cceeff')
+
+    # Levels
     levels = [0, 50, 70, 95, 200]
     colors = ['#d32f2f', '#ffa000', '#388e3c', '#1976d2'] 
     cmap = mcolors.ListedColormap(colors)
     norm = mcolors.BoundaryNorm(levels, len(colors))
 
-    # CRITICAL FIX: Mask the data so "No Data" is transparent, not Red
-    # 1. Mask where recovery is huge (>300) OR essentially zero (<1)
-    plot_data = np.ma.masked_where((recovery_grid < 1) | (recovery_grid > 200), recovery_grid)
+    # --- CRITICAL FIX: The Masking ---
+    # We use 'masked_invalid' which hides any NaN values we created in the main loop
+    plot_data = np.ma.masked_invalid(recovery_grid)
 
     mesh = ax.pcolormesh(lons, lats, plot_data, cmap=cmap, norm=norm, 
-                         transform=ccrs.PlateCarree(), shading='auto')
+                         transform=ccrs.PlateCarree(), shading='auto', zorder=5)
 
     t_str = str(valid_time).split('T')[1][:5]
     d_str = str(valid_time).split('T')[0]
@@ -149,6 +152,7 @@ def main():
     
     fuel_grid_subset = None
     moe_grid_subset = None
+    valid_fuel_mask = None # New Mask
     y_slice, x_slice = None, None
 
     for fhr in range(1, 19):
@@ -159,7 +163,6 @@ def main():
             ds = xr.open_dataset(grib, engine='cfgrib', 
                                  filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2})
             
-            # Auto-calculate indices for this domain
             if y_slice is None:
                 y_slice, x_slice = get_domain_slice(ds, PLOT_EXTENT)
             
@@ -172,19 +175,33 @@ def main():
             lons = np.where(lons_raw > 180, lons_raw - 360, lons_raw)
             valid_time = ds_sub.valid_time.values
 
+            # One-Time Fuel Setup
             if fuel_grid_subset is None:
                 fuel_grid_subset = sample_fuel_at_weather_points(FUEL_PATH, lats, lons)
+                
+                # Create MOE Grid
                 moe_grid_subset = np.zeros_like(fuel_grid_subset, dtype=float)
                 for fid, moe_val in MOE_LOOKUP.items():
                     moe_grid_subset[fuel_grid_subset == fid] = moe_val
                 
-                moe_grid_subset[moe_grid_subset == 0] = 999 
-                moe_grid_subset[fuel_grid_subset > 13] = 999
+                # --- CRITICAL FIX: Define What is "Valid Fuel" ---
+                # Valid = Fuel ID is between 1 and 13
+                valid_fuel_mask = (fuel_grid_subset >= 1) & (fuel_grid_subset <= 13)
+                
+                # Set invalid MOE to avoid division by zero
+                moe_grid_subset[~valid_fuel_mask] = 999 
 
+            # Calculations
             rh = calculate_rh(t_k, d_k)
             t_f = (t_k - 273.15) * 9/5 + 32
             fm = calculate_emc(t_f, rh)
+            
+            # Calc Recovery
             recovery = (fm / moe_grid_subset) * 100
+            
+            # --- CRITICAL FIX: Force Invalid Areas to NaN ---
+            # This makes the "Red Background" and "White Points" transparent
+            recovery = np.where(valid_fuel_mask, recovery, np.nan)
             
             generate_plot(recovery, lats, lons, valid_time, fhr, run_info)
             ds.close()
