@@ -1,246 +1,93 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    
-    <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
-    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.js"></script>
-    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.js"></script>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.css"/>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/css/bootstrap.min.css"/>
-    <link rel="stylesheet" href="https://netdna.bootstrapcdn.com/bootstrap/3.0.0/css/bootstrap-glyphicons.css"/>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.2.0/css/all.min.css"/>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.css"/>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/python-visualization/folium/folium/templates/leaflet.awesome.rotate.min.css"/>
-    
-            <meta name="viewport" content="width=device-width,
-                initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-            <style>
-                #map_66acc48ee3f53c5046e1d111e3de6722 {
-                    position: relative;
-                    width: 100.0%;
-                    height: 100.0%;
-                    left: 0.0%;
-                    top: 0.0%;
-                }
-                .leaflet-container { font-size: 1rem; }
-            </style>
-
-            <style>html, body {
-                width: 100%;
-                height: 100%;
-                margin: 0;
-                padding: 0;
-            }
-            </style>
-
-            <style>#map {
-                position:absolute;
-                top:0;
-                bottom:0;
-                right:0;
-                left:0;
-                }
-            </style>
-
-            <script>
-                L_NO_TOUCH = false;
-                L_DISABLE_3D = false;
-            </script>
-
-        
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fire Weather Recovery Viewer</title>
+    <style>
+        body { font-family: sans-serif; background: #222; color: #eee; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+        h2 { margin: 10px 0; }
+        .controls { margin-bottom: 20px; display: flex; gap: 10px; }
+        button { padding: 10px 20px; cursor: pointer; background: #444; color: #fff; border: 1px solid #666; font-size: 16px; }
+        button:hover { background: #666; }
+        button.active { background: #007bff; border-color: #0056b3; }
+        #map-container { width: 100%; max-width: 1000px; border: 1px solid #444; background: #000; }
+        img { width: 100%; height: auto; display: block; }
+        .timeline { display: flex; gap: 2px; margin-top: 10px; flex-wrap: wrap; justify-content: center; max-width: 1000px; }
+        .time-box { width: 40px; padding: 5px; background: #333; text-align: center; cursor: pointer; font-size: 12px; }
+        .time-box:hover, .time-box.active { background: #007bff; }
+    </style>
 </head>
 <body>
-    
-    
-            <div class="folium-map" id="map_66acc48ee3f53c5046e1d111e3de6722" ></div>
-        
-</body>
+
+    <h2>Nighttime Fuel Recovery</h2>
+    <div id="status">Run: Loading...</div>
+
+    <div id="map-container">
+        <img id="forecast-img" src="images/recovery_f01.png" onerror="this.src=''; this.alt='Image not found (Script may be running)'">
+    </div>
+
+    <div class="controls">
+        <button onclick="changeFrame(-1)">&#8592; Prev</button>
+        <button onclick="togglePlay()" id="playBtn">Play</button>
+        <button onclick="changeFrame(1)">Next &#8594;</button>
+    </div>
+
+    <div class="timeline" id="timeline"></div>
+
 <script>
-    
-    
-            var map_66acc48ee3f53c5046e1d111e3de6722 = L.map(
-                "map_66acc48ee3f53c5046e1d111e3de6722",
-                {
-                    center: [34.0, -84.0],
-                    crs: L.CRS.EPSG3857,
-                    ...{
-  "zoom": 6,
-  "zoomControl": true,
-  "preferCanvas": false,
-}
+    const totalHours = 18; 
+    let currentHour = 1;
+    let isPlaying = false;
+    let timer;
 
-                }
-            );
+    // Build Timeline
+    const timeline = document.getElementById('timeline');
+    for(let i=1; i<=totalHours; i++) {
+        let div = document.createElement('div');
+        div.className = 'time-box';
+        div.innerText = 'f'+ (i < 10 ? '0'+i : i);
+        div.onclick = () => setFrame(i);
+        div.id = 'box-'+i;
+        timeline.appendChild(div);
+    }
 
-            
+    function setFrame(h) {
+        currentHour = h;
+        if(currentHour > totalHours) currentHour = 1;
+        if(currentHour < 1) currentHour = totalHours;
 
-        
-    
-            var tile_layer_f1096212807d1a0bce5f3c4ee6c09bc5 = L.tileLayer(
-                "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-                {
-  "minZoom": 0,
-  "maxZoom": 20,
-  "maxNativeZoom": 20,
-  "noWrap": false,
-  "attribution": "\u0026copy; \u003ca href=\"https://www.openstreetmap.org/copyright\"\u003eOpenStreetMap\u003c/a\u003e contributors \u0026copy; \u003ca href=\"https://carto.com/attributions\"\u003eCARTO\u003c/a\u003e",
-  "subdomains": "abcd",
-  "detectRetina": false,
-  "tms": false,
-  "opacity": 1,
-}
+        const fStr = currentHour < 10 ? '0'+currentHour : currentHour;
+        document.getElementById('forecast-img').src = `images/recovery_f${fStr}.png`;
 
-            );
-        
-    
-            tile_layer_f1096212807d1a0bce5f3c4ee6c09bc5.addTo(map_66acc48ee3f53c5046e1d111e3de6722);
-        
-    
-            var layer_control_fb986f92ed857db7e0bf26a63055ba5e_layers = {
-                base_layers : {
-                    "cartodbdarkmatter" : tile_layer_f1096212807d1a0bce5f3c4ee6c09bc5,
-                },
-                overlays :  {
-                    "Hour 13:00Z (+1)" : feature_group_980339900ef36ebcc5ecddeca8640a4a,
-                    "Hour 14:00Z (+2)" : feature_group_0f3afa4caebed7ca2e45dd06f25d863c,
-                    "Hour 15:00Z (+3)" : feature_group_f80f94ed6d78c910ebdb46745c1f083d,
-                    "Hour 16:00Z (+4)" : feature_group_88dea882e276ea0f7eac6e62bb0a5e86,
-                    "Hour 17:00Z (+5)" : feature_group_d61a654b6dc4b45a8b0f346f90fbccf2,
-                    "Hour 18:00Z (+6)" : feature_group_d8c3837daeee78f52fd6c798f0cf4fc6,
-                    "Hour 19:00Z (+7)" : feature_group_e5fd996fada3a53855da40000324ce66,
-                    "Hour 20:00Z (+8)" : feature_group_15964e0ef4ddb5a8b431cba067bfa2da,
-                    "Hour 21:00Z (+9)" : feature_group_b90ba5150c4f1666d0e6ea31473a4fb4,
-                    "Hour 22:00Z (+10)" : feature_group_3c10e1ca5d937462ae46fd4fb7ed8801,
-                    "Hour 23:00Z (+11)" : feature_group_d36325e2df272f832442d45a54340ecd,
-                    "Hour 00:00Z (+12)" : feature_group_51638f1f07a96c60d765031220f4fcc4,
-                    "Hour 01:00Z (+13)" : feature_group_bd819008a331b457508056f2a214610a,
-                    "Hour 02:00Z (+14)" : feature_group_8632aed8bdd637bb323b7d09f42209b5,
-                    "Hour 03:00Z (+15)" : feature_group_db8c127d6d1b51607fbfc8331c2c17fc,
-                    "Hour 04:00Z (+16)" : feature_group_d1ea19e5bef34fa0a1f1ef4f1a815909,
-                    "Hour 05:00Z (+17)" : feature_group_9ea264f3f422be1984dc9bd583e0fe5b,
-                    "Hour 06:00Z (+18)" : feature_group_6f9e89817a7f1583684975df55272493,
-                },
-            };
-            let layer_control_fb986f92ed857db7e0bf26a63055ba5e = L.control.layers(
-                layer_control_fb986f92ed857db7e0bf26a63055ba5e_layers.base_layers,
-                layer_control_fb986f92ed857db7e0bf26a63055ba5e_layers.overlays,
-                {
-  "position": "topright",
-  "collapsed": true,
-  "autoZIndex": true,
-}
-            ).addTo(map_66acc48ee3f53c5046e1d111e3de6722);
+        // Update Timeline UI
+        document.querySelectorAll('.time-box').forEach(b => b.classList.remove('active'));
+        document.getElementById('box-'+currentHour).classList.add('active');
+    }
 
-        
+    function changeFrame(dir) {
+        setFrame(currentHour + dir);
+    }
+
+    function togglePlay() {
+        isPlaying = !isPlaying;
+        document.getElementById('playBtn').innerText = isPlaying ? "Pause" : "Play";
+        if(isPlaying) {
+            timer = setInterval(() => changeFrame(1), 500);
+        } else {
+            clearInterval(timer);
+        }
+    }
+
+    // Initialize
+    setFrame(1);
     
-            var feature_group_980339900ef36ebcc5ecddeca8640a4a = L.featureGroup(
-                {
-}
-            );
-        
-    
-            var feature_group_0f3afa4caebed7ca2e45dd06f25d863c = L.featureGroup(
-                {
-}
-            );
-        
-    
-            var feature_group_f80f94ed6d78c910ebdb46745c1f083d = L.featureGroup(
-                {
-}
-            );
-        
-    
-            var feature_group_88dea882e276ea0f7eac6e62bb0a5e86 = L.featureGroup(
-                {
-}
-            );
-        
-    
-            var feature_group_d61a654b6dc4b45a8b0f346f90fbccf2 = L.featureGroup(
-                {
-}
-            );
-        
-    
-            var feature_group_d8c3837daeee78f52fd6c798f0cf4fc6 = L.featureGroup(
-                {
-}
-            );
-        
-    
-            var feature_group_e5fd996fada3a53855da40000324ce66 = L.featureGroup(
-                {
-}
-            );
-        
-    
-            var feature_group_15964e0ef4ddb5a8b431cba067bfa2da = L.featureGroup(
-                {
-}
-            );
-        
-    
-            var feature_group_b90ba5150c4f1666d0e6ea31473a4fb4 = L.featureGroup(
-                {
-}
-            );
-        
-    
-            var feature_group_3c10e1ca5d937462ae46fd4fb7ed8801 = L.featureGroup(
-                {
-}
-            );
-        
-    
-            var feature_group_d36325e2df272f832442d45a54340ecd = L.featureGroup(
-                {
-}
-            );
-        
-    
-            var feature_group_51638f1f07a96c60d765031220f4fcc4 = L.featureGroup(
-                {
-}
-            );
-        
-    
-            var feature_group_bd819008a331b457508056f2a214610a = L.featureGroup(
-                {
-}
-            );
-        
-    
-            var feature_group_8632aed8bdd637bb323b7d09f42209b5 = L.featureGroup(
-                {
-}
-            );
-        
-    
-            var feature_group_db8c127d6d1b51607fbfc8331c2c17fc = L.featureGroup(
-                {
-}
-            );
-        
-    
-            var feature_group_d1ea19e5bef34fa0a1f1ef4f1a815909 = L.featureGroup(
-                {
-}
-            );
-        
-    
-            var feature_group_9ea264f3f422be1984dc9bd583e0fe5b = L.featureGroup(
-                {
-}
-            );
-        
-    
-            var feature_group_6f9e89817a7f1583684975df55272493 = L.featureGroup(
-                {
-}
-            );
-        
+    // Keyboard nav
+    document.addEventListener('keydown', (e) => {
+        if(e.key === "ArrowLeft") changeFrame(-1);
+        if(e.key === "ArrowRight") changeFrame(1);
+    });
 </script>
+
+</body>
 </html>
