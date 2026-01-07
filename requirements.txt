@@ -1,0 +1,8 @@
+herbie-data
+xarray
+rasterio
+folium
+numpy
+pandas
+matplotlib
+scipy
