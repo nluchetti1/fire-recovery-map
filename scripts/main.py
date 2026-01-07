@@ -15,10 +15,9 @@ FUEL_PATH = 'data/fuel_SE_final.tif'
 IMAGE_DIR = 'public/images'
 
 # PLOT DOMAIN: Southeast US [West, South, East, North]
-# This controls the final map zoom
 PLOT_EXTENT = [-90, 24, -75, 37]
 
-# [cite_start]MOE Lookup (Anderson 1982 / NOAA TM-205) [cite: 323, 397]
+# MOE Lookup (Anderson 1982 / NOAA TM-205)
 MOE_LOOKUP = {
     1: 12, 2: 15, 3: 25, 4: 20, 5: 20, 6: 25, 7: 40,
     8: 30, 9: 25, 10: 25, 11: 15, 12: 20, 13: 25
@@ -33,7 +32,7 @@ def calculate_rh(t_kelvin, d_kelvin):
     return np.clip((e / es) * 100.0, 0, 100)
 
 def calculate_emc(T_degF, RH_percent):
-    [cite_start]"""Calculates Fuel Moisture (Simard 1968)[cite: 279, 403]."""
+    """Calculates Fuel Moisture (Simard 1968)."""
     h = np.clip(RH_percent, 0, 100)
     t = T_degF
     
@@ -91,7 +90,7 @@ def generate_plot(recovery_grid, lats, lons, valid_time, fhr, run_str):
     ax.add_feature(cfeature.BORDERS, linewidth=1)
     ax.add_feature(cfeature.STATES, linewidth=0.5, edgecolor='gray')
 
-    # [cite_start]Color Levels: Poor (<50), Fair (50-70), Good (70-95), Excellent (>95) [cite: 332-340]
+    # Color Levels: Poor (<50), Fair (50-70), Good (70-95), Excellent (>95)
     levels = [0, 50, 70, 95, 200]
     colors = ['#d32f2f', '#ffa000', '#388e3c', '#1976d2'] 
     cmap = mcolors.ListedColormap(colors)
@@ -130,8 +129,7 @@ def main():
     moe_grid_subset = None
 
     # --- INDICES FOR SUBSETTING ---
-    # These indices roughly correspond to the Southeast US on the HREF CONUS grid.
-    # This avoids the "no index found" error by skipping coordinate lookup.
+    # SE US subset indices to speed up processing
     y_min, y_max = 200, 600   # South-North pixel indices
     x_min, x_max = 1100, 1600 # West-East pixel indices
 
@@ -144,8 +142,7 @@ def main():
             ds = xr.open_dataset(grib, engine='cfgrib', 
                                  filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2})
             
-            # --- CRITICAL FIX: NUMPY SLICING ---
-            # Use .isel to slice by integer index, not coordinate value
+            # Subsetting using integer slicing
             ds_sub = ds.isel(y=slice(y_min, y_max), x=slice(x_min, x_max))
             
             t_k = ds_sub['t2m'].values
