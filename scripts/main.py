@@ -14,47 +14,38 @@ from datetime import datetime
 FUEL_PATH = 'data/fuel_SE_final.tif' 
 IMAGE_DIR = 'public/images'
 
-# DOMAIN: Southeast US 
-# ORDER MUST BE: [West, East, South, North]
-PLOT_EXTENT = [-90, -74, 24, 38] 
+# DOMAIN: Tight zoom on the Carolinas/GA/VA
+# [West, East, South, North]
+PLOT_EXTENT = [-85.0, -75.0, 31.0, 37.0] 
 
-# MOE Lookup (Anderson 1982 / NOAA TM-205)
+# MOE Lookup
 MOE_LOOKUP = {
     1: 12, 2: 15, 3: 25, 4: 20, 5: 20, 6: 25, 7: 40,
     8: 30, 9: 25, 10: 25, 11: 15, 12: 20, 13: 25
 }
 
 def get_domain_slice(ds, extent):
-    """
-    Finds x/y indices for the extent to speed up processing.
-    Extent order: [West, East, South, North]
-    """
+    """Finds x/y indices for the extent."""
     lats = ds.latitude.values
     lons = ds.longitude.values
-    
-    # Fix Longitude (0-360 -> -180 to 180)
     lons = np.where(lons > 180, lons - 360, lons)
     
-    # Create mask (West, East, South, North)
     mask = (
-        (lons >= extent[0]) & (lons <= extent[1]) &
-        (lats >= extent[2]) & (lats <= extent[3])
+        (lons >= extent[0] - 2.0) & (lons <= extent[1] + 2.0) &
+        (lats >= extent[2] - 2.0) & (lats <= extent[3] + 2.0)
     )
     
     rows, cols = np.where(mask)
-    
-    if len(rows) == 0:
-        # Fallback if domain mismatch
-        return slice(None), slice(None)
+    if len(rows) == 0: return slice(None), slice(None)
 
-    pad = 10 # Padding to ensure we don't cut off edges
+    pad = 5
     y_min, y_max = max(0, rows.min()-pad), min(lats.shape[0], rows.max()+pad)
     x_min, x_max = max(0, cols.min()-pad), min(lats.shape[1], cols.max()+pad)
     
     return slice(y_min, y_max), slice(x_min, x_max)
 
 def calculate_rh(t_kelvin, d_kelvin):
-    """Calculates RH from Temp/Dewpoint."""
+    """Calculates RH."""
     t_c = t_kelvin - 273.15
     d_c = d_kelvin - 273.15
     es = 6.112 * np.exp((17.67 * t_c) / (t_c + 243.5))
@@ -62,7 +53,7 @@ def calculate_rh(t_kelvin, d_kelvin):
     return np.clip((e / es) * 100.0, 0, 100)
 
 def calculate_emc(T_degF, RH_percent):
-    """Calculates Fuel Moisture (Simard 1968)."""
+    """Calculates Fuel Moisture."""
     h = np.clip(RH_percent, 0, 100)
     t = T_degF
     
@@ -79,7 +70,7 @@ def calculate_emc(T_degF, RH_percent):
     return np.clip(emc, 0, 35)
 
 def sample_fuel_at_weather_points(fuel_path, weather_lats, weather_lons):
-    """Probes the fuel map at weather points."""
+    """Probes the fuel map."""
     print("Sampling Fuel Map...")
     with rasterio.open(fuel_path) as src:
         flat_lons = weather_lons.ravel()
@@ -109,42 +100,35 @@ def download_file(date_str, run, fhr):
         return None
 
 def generate_plot(recovery_grid, lats, lons, valid_time, fhr, run_str):
-    """Generates PNG map using Lambert Conformal."""
+    """Generates PNG map."""
     fig = plt.figure(figsize=(10, 8))
     
-    # Lambert Conformal Projection (Standard US View)
-    ax = plt.axes(projection=ccrs.LambertConformal(central_longitude=-96, central_latitude=39))
-    
-    # Set Extent: [West, East, South, North]
+    ax = plt.axes(projection=ccrs.LambertConformal(central_longitude=-80, central_latitude=34))
     ax.set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
 
     # Features
-    ax.add_feature(cfeature.COASTLINE, linewidth=1)
-    ax.add_feature(cfeature.BORDERS, linewidth=1)
-    ax.add_feature(cfeature.STATES, linewidth=0.5, edgecolor='gray')
-    ax.add_feature(cfeature.OCEAN, facecolor='#e0f7fa')
-    ax.add_feature(cfeature.LAND, facecolor='#f0f0f0')
-
-    # Color Levels (Red=Poor, Orange=Fair, Green=Good, Blue=Excellent)
+    ax.add_feature(cfeature.COASTLINE, linewidth=1.5)
+    ax.add_feature(cfeature.BORDERS, linewidth=1.5)
+    ax.add_feature(cfeature.STATES, linewidth=1.0, edgecolor='black')
+    
+    # Levels and Colors
     levels = [0, 50, 70, 95, 200]
     colors = ['#d32f2f', '#ffa000', '#388e3c', '#1976d2'] 
     cmap = mcolors.ListedColormap(colors)
     norm = mcolors.BoundaryNorm(levels, len(colors))
 
-    # Mask invalid values
-    plot_data = np.ma.masked_where((recovery_grid < 1) | (recovery_grid > 300), recovery_grid)
+    # CRITICAL FIX: Mask the data so "No Data" is transparent, not Red
+    # 1. Mask where recovery is huge (>300) OR essentially zero (<1)
+    plot_data = np.ma.masked_where((recovery_grid < 1) | (recovery_grid > 200), recovery_grid)
 
-    # Plot
     mesh = ax.pcolormesh(lons, lats, plot_data, cmap=cmap, norm=norm, 
                          transform=ccrs.PlateCarree(), shading='auto')
 
-    # Titles
     t_str = str(valid_time).split('T')[1][:5]
     d_str = str(valid_time).split('T')[0]
     plt.title(f"Nighttime Fuel Recovery\nValid: {d_str} {t_str}Z (F{fhr:02d})", loc='left', fontsize=12, fontweight='bold')
     plt.title(f"Run: {run_str}", loc='right', fontsize=10)
 
-    # Legend
     cbar = plt.colorbar(mesh, orientation='horizontal', pad=0.05, aspect=35, shrink=0.8)
     cbar.set_ticks([25, 60, 82.5, 147.5])
     cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'])
@@ -172,29 +156,22 @@ def main():
         if not grib: continue
 
         try:
-            # 1. Load FULL CONUS grid
             ds = xr.open_dataset(grib, engine='cfgrib', 
                                  filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2})
             
-            # 2. Calculate Slicing Indices (Automatic)
+            # Auto-calculate indices for this domain
             if y_slice is None:
-                print("Calculating domain indices...")
                 y_slice, x_slice = get_domain_slice(ds, PLOT_EXTENT)
             
-            # 3. Clip Data to Domain
             ds_sub = ds.isel(y=y_slice, x=x_slice)
             
             t_k = ds_sub['t2m'].values
             d_k = ds_sub['d2m'].values
             lats = ds_sub.latitude.values
-            
-            # Fix Longitude (0-360 -> -180 to 180)
             lons_raw = ds_sub.longitude.values
             lons = np.where(lons_raw > 180, lons_raw - 360, lons_raw)
-            
             valid_time = ds_sub.valid_time.values
 
-            # 4. Sample Fuel (One time setup)
             if fuel_grid_subset is None:
                 fuel_grid_subset = sample_fuel_at_weather_points(FUEL_PATH, lats, lons)
                 moe_grid_subset = np.zeros_like(fuel_grid_subset, dtype=float)
@@ -204,14 +181,12 @@ def main():
                 moe_grid_subset[moe_grid_subset == 0] = 999 
                 moe_grid_subset[fuel_grid_subset > 13] = 999
 
-            # 5. Calc & Plot
             rh = calculate_rh(t_k, d_k)
             t_f = (t_k - 273.15) * 9/5 + 32
             fm = calculate_emc(t_f, rh)
             recovery = (fm / moe_grid_subset) * 100
             
             generate_plot(recovery, lats, lons, valid_time, fhr, run_info)
-            
             ds.close()
 
         except Exception as e:
