@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-from metpy.plots import USCOUNTIES # Easy County Lines
+from metpy.plots import USCOUNTIES
 from datetime import datetime
 
 # --- CONFIGURATION ---
@@ -110,15 +110,15 @@ def generate_plot(recovery_grid, lats, lons, valid_time, fhr, run_str):
     ax = plt.axes(projection=ccrs.LambertConformal(central_longitude=-80, central_latitude=34))
     ax.set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
 
-    # Map Features
-    ax.add_feature(cfeature.COASTLINE, linewidth=1.0, zorder=10)
-    ax.add_feature(cfeature.BORDERS, linewidth=1.0, zorder=10)
-    ax.add_feature(cfeature.STATES, linewidth=1.0, edgecolor='black', zorder=10)
+    # --- MAP FEATURES ---
+    # States
+    ax.add_feature(cfeature.STATES, linewidth=1.5, edgecolor='black', zorder=10)
     
-    # --- ADD COUNTIES ---
-    # MetPy USCOUNTIES feature
+    # Counties (Darker and Thicker)
     try:
-        ax.add_feature(USCOUNTIES.with_scale('5m'), linewidth=0.3, edgecolor='gray', zorder=9)
+        # Scale '5m' or '20m'. '5m' is higher resolution.
+        # Edgecolor 'black' makes them visible.
+        ax.add_feature(USCOUNTIES.with_scale('5m'), linewidth=0.8, edgecolor='black', zorder=11, alpha=0.6)
     except Exception as e:
         print(f"Warning: Could not add counties ({e})")
 
@@ -137,7 +137,7 @@ def generate_plot(recovery_grid, lats, lons, valid_time, fhr, run_str):
     mesh = ax.pcolormesh(lons, lats, plot_data, cmap=cmap, norm=norm, 
                          transform=ccrs.PlateCarree(), shading='auto', zorder=5)
 
-    # Clean Title (Removed FBFM40)
+    # Clean Title
     t_str = str(valid_time).split('T')[1][:5]
     d_str = str(valid_time).split('T')[0]
     plt.title(f"Nighttime Fuel Recovery\nValid: {d_str} {t_str}Z (F{fhr:02d})", loc='left', fontsize=12, fontweight='bold')
@@ -157,7 +157,7 @@ def main():
     os.makedirs(IMAGE_DIR, exist_ok=True)
     
     now = datetime.utcnow()
-    # Simple logic for HREF availability (it runs late)
+    # Simple logic for HREF availability
     run_cycle = "12" if now.hour >= 14 else "00"
     date_str = now.strftime("%Y%m%d")
     run_info = f"{date_str} {run_cycle}Z"
