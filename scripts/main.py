@@ -27,7 +27,7 @@ MOE_LOOKUP = {
 }
 
 def get_domain_slice(ds, extent):
-    """Finds x/y indices for the extent to speed up processing."""
+    """Finds x/y indices for the extent."""
     lats = ds.latitude.values
     lons = ds.longitude.values
     lons = np.where(lons > 180, lons - 360, lons)
@@ -47,7 +47,6 @@ def get_domain_slice(ds, extent):
     return slice(y_min, y_max), slice(x_min, x_max)
 
 def calculate_rh(t_kelvin, d_kelvin):
-    """Calculates RH from Temp and Dewpoint (Kelvin)."""
     t_c = t_kelvin - 273.15
     d_c = d_kelvin - 273.15
     es = 6.112 * np.exp((17.67 * t_c) / (t_c + 243.5))
@@ -55,25 +54,21 @@ def calculate_rh(t_kelvin, d_kelvin):
     return np.clip((e / es) * 100.0, 0, 100)
 
 def calculate_emc(T_degF, RH_percent):
-    """Calculates Equilibrium Moisture Content (EMC)."""
     h = np.clip(RH_percent, 0, 100)
     t = T_degF
-    
     cond1 = h < 10
     cond2 = (h >= 10) & (h < 50)
     cond3 = h >= 50
-    
     emc = np.zeros_like(h)
-    
     emc[cond1] = 0.03229 + 0.281073*h[cond1] - 0.000578*h[cond1]*t[cond1]
     emc[cond2] = 2.22749 + 0.160107*h[cond2] - 0.01478*t[cond2]
     emc[cond3] = 21.0606 + 0.005565*(h[cond3]**2) - 0.00035*h[cond3]*t[cond3] - 0.483199*h[cond3]
-    
     return np.clip(emc, 0, 35)
 
 def prepare_fuel_grid(fuel_path, lats, lons):
     """Loads and resamples the fuel grid to match weather coordinates."""
-    print("Sampling Fuel Map...")
+    # print("Sampling Fuel Map...") 
+    # Commented out print to reduce log spam, enable if debugging
     with rasterio.open(fuel_path) as src:
         flat_lons = lons.ravel()
         flat_lats = lats.ravel()
@@ -83,7 +78,6 @@ def prepare_fuel_grid(fuel_path, lats, lons):
         
     fuel_grid = fuel_flat.reshape(lats.shape)
     
-    # Create MOE Grid
     moe_grid = np.zeros_like(fuel_grid, dtype=float)
     for fid, moe_val in MOE_LOOKUP.items():
         moe_grid[fuel_grid == fid] = moe_val
@@ -94,7 +88,6 @@ def prepare_fuel_grid(fuel_path, lats, lons):
     return moe_grid, valid_mask
 
 def download_file(url, local_filename):
-    """Generic download helper."""
     print(f"Downloading {local_filename}...")
     try:
         with requests.get(url, stream=True, timeout=60) as r:
@@ -108,16 +101,19 @@ def download_file(url, local_filename):
         return None
 
 def generate_recovery_map(t_k, d_k, moe_grid, valid_mask):
-    """Shared logic to turn T/Td into Recovery %."""
     rh = calculate_rh(t_k, d_k)
     t_f = (t_k - 273.15) * 9/5 + 32
     fm = calculate_emc(t_f, rh)
     recovery = (fm / moe_grid) * 100
     return np.where(valid_mask, recovery, np.nan)
 
-def plot_verification(forecast_rec, observed_rec, lats, lons, valid_time):
-    """Creates a side-by-side verification plot."""
-    fig, ax = plt.subplots(1, 2, figsize=(16, 8), subplot_kw={'projection': ccrs.LambertConformal(central_longitude=-80, central_latitude=34)})
+def plot_verification(f_rec, f_lats, f_lons, o_rec, o_lats, o_lons, valid_time):
+    """
+    Plots Forecast (Left) vs Observed (Right).
+    Accepts separate lat/lon arrays for each since grids differ.
+    """
+    fig, ax = plt.subplots(1, 2, figsize=(16, 8), 
+                           subplot_kw={'projection': ccrs.LambertConformal(central_longitude=-80, central_latitude=34)})
     
     # Common Plot Settings
     levels = [0, 50, 70, 95, 200]
@@ -130,14 +126,14 @@ def plot_verification(forecast_rec, observed_rec, lats, lons, valid_time):
     ax[0].add_feature(cfeature.STATES, linewidth=1.5)
     ax[0].add_feature(USCOUNTIES.with_scale('5m'), linewidth=0.5, alpha=0.5)
     ax[0].set_title(f"HREF Forecast (09Z)\nValid: {valid_time} UTC", fontweight='bold')
-    mesh = ax[0].pcolormesh(lons, lats, forecast_rec, cmap=cmap, norm=norm, transform=ccrs.PlateCarree())
+    mesh = ax[0].pcolormesh(f_lons, f_lats, f_rec, cmap=cmap, norm=norm, transform=ccrs.PlateCarree(), shading='auto')
     
     # 2. Observed Plot
     ax[1].set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
     ax[1].add_feature(cfeature.STATES, linewidth=1.5)
     ax[1].add_feature(USCOUNTIES.with_scale('5m'), linewidth=0.5, alpha=0.5)
     ax[1].set_title(f"RTMA Observed (09Z)\nValid: {valid_time} UTC", fontweight='bold')
-    ax[1].pcolormesh(lons, lats, observed_rec, cmap=cmap, norm=norm, transform=ccrs.PlateCarree())
+    ax[1].pcolormesh(o_lons, o_lats, o_rec, cmap=cmap, norm=norm, transform=ccrs.PlateCarree(), shading='auto')
 
     # Legend
     cbar = plt.colorbar(mesh, ax=ax.ravel().tolist(), orientation='horizontal', pad=0.05, aspect=50, shrink=0.6)
@@ -149,22 +145,59 @@ def plot_verification(forecast_rec, observed_rec, lats, lons, valid_time):
     plt.close()
     print("Saved Verification Plot")
 
-def run_verification_logic(moe_grid, valid_mask, grid_lats, grid_lons):
-    """Runs the 09Z Morning Verification."""
+def generate_main_plot(recovery_grid, lats, lons, valid_time, fhr, run_str):
+    """Standard single-panel plot for the forecast loop."""
+    fig = plt.figure(figsize=(10, 8))
+    ax = plt.axes(projection=ccrs.LambertConformal(central_longitude=-80, central_latitude=34))
+    ax.set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
+    ax.add_feature(cfeature.STATES, linewidth=1.5, edgecolor='black', zorder=10)
+    try:
+        ax.add_feature(USCOUNTIES.with_scale('5m'), linewidth=0.8, edgecolor='black', zorder=11, alpha=0.6)
+    except: pass
+    ax.add_feature(cfeature.OCEAN, facecolor='#cceeff')
+    ax.add_feature(cfeature.LAND, facecolor='#f0f0f0')
+
+    levels = [0, 50, 70, 95, 200]
+    colors = ['#d32f2f', '#ffa000', '#388e3c', '#1976d2'] 
+    cmap = mcolors.ListedColormap(colors)
+    norm = mcolors.BoundaryNorm(levels, len(colors))
+    plot_data = np.ma.masked_invalid(recovery_grid)
+
+    mesh = ax.pcolormesh(lons, lats, plot_data, cmap=cmap, norm=norm, 
+                         transform=ccrs.PlateCarree(), shading='auto', zorder=5)
+
+    t_str = str(valid_time).split('T')[1][:5]
+    d_str = str(valid_time).split('T')[0]
+    plt.title(f"Nighttime Fuel Recovery\nValid: {d_str} {t_str}Z (F{fhr:02d})", loc='left', fontsize=12, fontweight='bold')
+    plt.title(f"Run: {run_str}", loc='right', fontsize=10)
+    cbar = plt.colorbar(mesh, orientation='horizontal', pad=0.05, aspect=35, shrink=0.8)
+    cbar.set_ticks([25, 60, 82.5, 147.5])
+    cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'])
+
+    filename = f"recovery_f{fhr:02d}.png"
+    save_path = os.path.join(IMAGE_DIR, filename)
+    plt.savefig(save_path, bbox_inches='tight', dpi=100)
+    plt.close()
+    print(f"Saved {filename}")
+
+def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
+    """
+    Runs the verification.
+    Arguments:
+      - moe_grid/valid_mask: Pre-calculated fuel mask for HREF grid
+      - h_lats/h_lons: Coordinates for HREF grid
+      - y_sl, x_sl: Slice indices to crop the grids efficiently
+    """
     print("--- Starting Verification ---")
     today = datetime.utcnow().date()
     today_str = today.strftime("%Y%m%d")
     
-    # Target: 09Z this morning (approx 4 AM EST)
-    # We compare HREF 00Z Run (F09) vs RTMA 09Z
+    # Target: 09Z this morning
     fhr = 9
     
-    # 1. Get HREF (Forecast)
     href_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/href/prod/href.{today_str}/ensprod/href.t00z.conus.mean.f{fhr:02d}.grib2"
     href_file = download_file(href_url, "verif_href.grib2")
     
-    # 2. Get RTMA (Observed)
-    # RTMA filename format: rtma2p5.t09z.2dvaranl_ndfd.grb2
     rtma_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/rtma/prod/rtma2p5.{today_str}/rtma2p5.t09z.2dvaranl_ndfd.grb2_wexp"
     rtma_file = download_file(rtma_url, "verif_rtma.grib2")
     
@@ -173,30 +206,46 @@ def run_verification_logic(moe_grid, valid_mask, grid_lats, grid_lons):
         return
 
     try:
-        # Process HREF
+        # --- PROCESS HREF (Forecast) ---
         ds_href = xr.open_dataset(href_file, engine='cfgrib', 
                                   filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2})
-        # Use simple interpolation to match the pre-computed fuel grid
-        # (Assuming the fuel grid was built on the HREF grid in the main loop, we need to match that)
-        ds_href_interp = ds_href.interp(latitude=grid_lats, longitude=grid_lons, method='nearest')
         
-        rec_href = generate_recovery_map(ds_href_interp['t2m'].values, ds_href_interp['d2m'].values, moe_grid, valid_mask)
+        # SLICE using the indices passed from Main Loop (Robust)
+        ds_href_sub = ds_href.isel(y=y_sl, x=x_sl)
+        rec_href = generate_recovery_map(ds_href_sub['t2m'].values, ds_href_sub['d2m'].values, moe_grid, valid_mask)
         
-        # Process RTMA
-        ds_rtma = xr.open_dataset(rtma_file, engine='cfgrib') 
-        # RTMA variables are often 't2m' and 'd2m' or '2t'/'2d' depending on cfgrib version
-        # We interp RTMA to the HREF/Fuel Grid
-        ds_rtma_interp = ds_rtma.interp(latitude=grid_lats, longitude=grid_lons, method='linear')
+        # --- PROCESS RTMA (Observed) ---
+        ds_rtma = xr.open_dataset(rtma_file, engine='cfgrib')
         
-        rec_rtma = generate_recovery_map(ds_rtma_interp['t2m'].values, ds_rtma_interp['d2m'].values, moe_grid, valid_mask)
+        # RTMA has a DIFFERENT grid. We must compute a new slice and fuel mask.
+        r_ysl, r_xsl = get_domain_slice(ds_rtma, PLOT_EXTENT)
+        ds_rtma_sub = ds_rtma.isel(y=r_ysl, x=r_xsl)
         
-        plot_verification(rec_href, rec_rtma, grid_lats, grid_lons, f"{today_str} 09:00")
+        # Get RTMA Coordinates
+        r_lats = ds_rtma_sub.latitude.values
+        r_lons = ds_rtma_sub.longitude.values
+        r_lons = np.where(r_lons > 180, r_lons - 360, r_lons)
+        
+        # Generate Fuel Mask specifically for RTMA points
+        r_moe, r_mask = prepare_fuel_grid(FUEL_PATH, r_lats, r_lons)
+        
+        # Note: RTMA variable names can vary. Usually 't2m'/'d2m' or '2t'/'2d'.
+        # xarray/cfgrib usually standardizes to t2m/d2m but check keys if it fails.
+        t_var = 't2m' if 't2m' in ds_rtma_sub else '2t'
+        d_var = 'd2m' if 'd2m' in ds_rtma_sub else '2d'
+        
+        rec_rtma = generate_recovery_map(ds_rtma_sub[t_var].values, ds_rtma_sub[d_var].values, r_moe, r_mask)
+        
+        # Plot with separate coordinates
+        plot_verification(rec_href, h_lats, h_lons, rec_rtma, r_lats, r_lons, f"{today_str} 09:00")
         
         ds_href.close()
         ds_rtma.close()
         
     except Exception as e:
         print(f"Verification Failed: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         if os.path.exists("verif_href.grib2"): os.remove("verif_href.grib2")
         if os.path.exists("verif_rtma.grib2"): os.remove("verif_rtma.grib2")
@@ -209,13 +258,13 @@ def main():
     date_str = now.strftime("%Y%m%d")
     run_info = f"{date_str} {run_cycle}Z"
     
-    # State holders for the grid definition (so we can reuse them for verification)
+    # Store these to pass to verification later
     global_lats, global_lons = None, None
     global_moe, global_mask = None, None
+    y_slice, x_slice = None, None # Keep indices for slicing verification HREF
 
     # --- 48 HOUR FORECAST LOOP ---
     for fhr in range(1, 49):
-        # Construct HREF URL manually to pass to generic downloader
         base_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/href/prod/href.{date_str}/ensprod"
         filename = f"href.t{run_cycle}z.conus.mean.f{fhr:02d}.grib2"
         full_url = f"{base_url}/{filename}"
@@ -227,7 +276,6 @@ def main():
             ds = xr.open_dataset(grib, engine='cfgrib', 
                                  filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2})
             
-            # One-time Grid Setup
             if global_lats is None:
                 y_slice, x_slice = get_domain_slice(ds, PLOT_EXTENT)
                 ds_sub = ds.isel(y=y_slice, x=x_slice)
@@ -240,17 +288,9 @@ def main():
             else:
                 ds_sub = ds.isel(y=y_slice, x=x_slice)
 
-            # Generate Forecast Plot
             recovery = generate_recovery_map(ds_sub['t2m'].values, ds_sub['d2m'].values, global_moe, global_mask)
             
-            # Save Forecast Image
-            # ... (Plotting code condensed for brevity, same as before) ...
-            # You can insert your generate_plot function here using 'recovery'
-            
-            # --- For this example I'm just calling your previous plotting logic ---
-            # (In your actual file, paste the 'generate_plot' function back in and call it here)
-            # generate_plot(recovery, global_lats, global_lons, ds_sub.valid_time.values, fhr, run_info)
-            
+            generate_main_plot(recovery, global_lats, global_lons, ds_sub.valid_time.values, fhr, run_info)
             ds.close()
 
         except Exception as e:
@@ -259,9 +299,8 @@ def main():
             if os.path.exists(filename): os.remove(filename)
 
     # --- RUN VERIFICATION (After Forecast is done) ---
-    # Only run if we successfully built the grid
     if global_lats is not None:
-        run_verification_logic(global_moe, global_mask, global_lats, global_lons)
+        run_verification_logic(global_moe, global_mask, global_lats, global_lons, y_slice, x_slice)
 
 if __name__ == "__main__":
     import matplotlib
