@@ -90,6 +90,7 @@
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
             position: relative; 
             min-height: 500px;
+            margin-bottom: 40px; /* Added margin for spacing below */
         }
         
         #forecast-img {
@@ -111,11 +112,31 @@
             border-radius: 8px;
             z-index: 10;
         }
+
+        /* VERIFICATION SECTION STYLES */
+        .verification-container {
+            width: 100%;
+            max-width: 1000px;
+            background: white;
+            border: 1px solid #ccc;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            padding: 20px;
+            box-sizing: border-box;
+            text-align: center;
+            margin-bottom: 50px;
+        }
+
+        .verification-img {
+            width: 100%;
+            height: auto;
+            border: 1px solid #eee;
+            margin-top: 15px;
+        }
     </style>
 </head>
 <body>
 
-    <h2>Nighttime Fuel Recovery</h2>
+    <h2>Nighttime Fuel Recovery Forecast</h2>
     
     <div class="controls-header">
         <div>
@@ -132,6 +153,17 @@
         </div>
         <img id="forecast-img" src="" alt="Select a time" onerror="this.style.display='none'">
     </div>
+
+    <div class="verification-container" id="verif-section">
+        <h2>Daily Model Verification</h2>
+        <p>Comparison of Forecasted Recovery (HREF) vs. Observed Recovery (Derived from RTMA).</p>
+        <p style="font-size: 0.9em; color: #666;">Valid at 0900 UTC (Approx 4:00 AM Local)</p>
+        
+        <img class="verification-img" 
+             src="images/verification_09z.png" 
+             alt="Verification Map - Pending Generation"
+             onerror="this.parentElement.style.display='none'"> 
+             </div>
 
 <script>
     const totalHours = 48; 
