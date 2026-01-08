@@ -4,247 +4,90 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Fire Weather Recovery Viewer</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <style>
-        body { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-            background: #f8f9fa; 
-            color: #333;
-            margin: 0; 
-            display: flex; 
-            flex-direction: column; 
-            align-items: center; 
-            padding: 20px;
-        }
-        
-        h2 { margin: 10px 0; color: #222; }
-        
-        /* CONTROLS AREA */
-        .controls-header {
-            display: flex;
-            justify-content: space-between;
-            width: 100%;
-            max-width: 1000px;
-            align-items: center;
-            margin-bottom: 10px;
-            font-size: 14px;
-        }
-
-        .btn-green {
-            background-color: #28a745;
-            color: white;
-            border: none;
-            padding: 8px 15px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-weight: bold;
-            font-size: 13px;
-        }
-        .btn-green:hover { background-color: #218838; }
-        .btn-green:disabled { background-color: #ccc; cursor: default; }
-
-        /* GRID LAYOUT FOR BUTTONS */
-        .timeline-grid {
-            display: grid;
-            grid-template-columns: repeat(24, 1fr); /* 24 columns for 2 rows of 24 */
-            gap: 2px;
-            width: 100%;
-            max-width: 1000px;
-            margin-bottom: 15px;
-            background: #e9ecef;
-            padding: 5px;
-            border-radius: 4px;
-            border: 1px solid #dee2e6;
-        }
-
-        .time-box {
-            background: #fff;
-            border: 1px solid #ced4da;
-            text-align: center;
-            font-size: 11px;
-            padding: 4px 0;
-            cursor: pointer;
-            user-select: none;
-            color: #495057;
-        }
-
-        .time-box:hover {
-            background: #dbeafe;
-            color: #0056b3;
-            border-color: #b6d4fe;
-        }
-
-        .time-box.active {
-            background: #0d6efd;
-            color: white;
-            border-color: #0d6efd;
-            font-weight: bold;
-        }
-
-        /* MAP CONTAINER */
-        #map-container {
-            width: 100%;
-            max-width: 1000px;
-            background: white;
-            border: 1px solid #ccc;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            position: relative; 
-            min-height: 500px;
-        }
-        
-        #forecast-img {
-            width: 100%;
-            height: auto;
-            display: block;
-        }
-
-        #loader {
-            position: absolute;
-            top: 50%; left: 50%;
-            transform: translate(-50%, -50%);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            color: #666;
-            background: rgba(255,255,255,0.8);
-            padding: 20px;
-            border-radius: 8px;
-            z-index: 10;
-        }
+        body { font-family: sans-serif; background: #222; color: #eee; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+        h2 { margin: 10px 0; }
+        .controls { margin-bottom: 20px; display: flex; gap: 10px; }
+        button { padding: 10px 20px; cursor: pointer; background: #444; color: #fff; border: 1px solid #666; font-size: 16px; }
+        button:hover { background: #666; }
+        button.active { background: #007bff; border-color: #0056b3; }
+        #map-container { width: 100%; max-width: 1000px; border: 1px solid #444; background: #000; }
+        img { width: 100%; height: auto; display: block; }
+        .timeline { display: flex; gap: 2px; margin-top: 10px; flex-wrap: wrap; justify-content: center; max-width: 1000px; }
+        .time-box { width: 40px; padding: 5px; background: #333; text-align: center; cursor: pointer; font-size: 12px; }
+        .time-box:hover, .time-box.active { background: #007bff; }
     </style>
 </head>
 <body>
 
     <h2>Nighttime Fuel Recovery</h2>
-    
-    <div class="controls-header">
-        <div>
-            <strong>Hover/Click</strong> to view | <strong>Arrows</strong> to navigate
-        </div>
-        <button class="btn-green" id="download-btn" onclick="generateGIF()">Download Animated GIF</button>
-    </div>
-
-    <div class="timeline-grid" id="timeline"></div>
+    <div id="status">Run: Loading...</div>
 
     <div id="map-container">
-        <div id="loader">
-            <span>Loading...</span>
-        </div>
-        <img id="forecast-img" src="" alt="Select a time" onerror="this.style.display='none'">
+        <img id="forecast-img" src="images/recovery_f01.png" onerror="this.src=''; this.alt='Image not found (Script may be running)'">
     </div>
 
+    <div class="controls">
+        <button onclick="changeFrame(-1)">&#8592; Prev</button>
+        <button onclick="togglePlay()" id="playBtn">Play</button>
+        <button onclick="changeFrame(1)">Next &#8594;</button>
+    </div>
+
+    <div class="timeline" id="timeline"></div>
+
 <script>
-    const totalHours = 48; 
-    const imageDir = "images/"; 
+    const totalHours = 18; 
+    let currentHour = 1;
+    let isPlaying = false;
+    let timer;
+
+    // Build Timeline
     const timeline = document.getElementById('timeline');
-    const imgElement = document.getElementById('forecast-img');
-    const loader = document.getElementById('loader');
-    const btn = document.getElementById('download-btn');
-    let boxes = [];
-
-    // --- SWITCH IMAGE ---
-    function setImage(fhr) {
-        const fhrStr = String(fhr).padStart(2, '0');
-        const filename = `recovery_f${fhrStr}.png`;
-        
-        loader.style.display = 'flex';
-        imgElement.style.display = 'block';
-        imgElement.src = imageDir + filename;
-
-        boxes.forEach(b => b.classList.remove('active'));
-        const activeBox = document.getElementById(`box-${fhr}`);
-        if(activeBox) activeBox.classList.add('active');
+    for(let i=1; i<=totalHours; i++) {
+        let div = document.createElement('div');
+        div.className = 'time-box';
+        div.innerText = 'f'+ (i < 10 ? '0'+i : i);
+        div.onclick = () => setFrame(i);
+        div.id = 'box-'+i;
+        timeline.appendChild(div);
     }
 
-    imgElement.onload = function() { loader.style.display = 'none'; };
-    imgElement.onerror = function() { loader.style.display = 'none'; };
+    function setFrame(h) {
+        currentHour = h;
+        if(currentHour > totalHours) currentHour = 1;
+        if(currentHour < 1) currentHour = totalHours;
 
-    // --- BUILD GRID ---
-    for (let i = 1; i <= totalHours; i++) {
-        let box = document.createElement('div');
-        box.className = 'time-box';
-        box.textContent = `f${i}`;
-        box.id = `box-${i}`;
-        
-        box.addEventListener('mouseenter', () => setImage(i));
-        box.addEventListener('click', () => setImage(i));
+        const fStr = currentHour < 10 ? '0'+currentHour : currentHour;
+        document.getElementById('forecast-img').src = `images/recovery_f${fStr}.png`;
 
-        timeline.appendChild(box);
-        boxes.push(box);
+        // Update Timeline UI
+        document.querySelectorAll('.time-box').forEach(b => b.classList.remove('active'));
+        document.getElementById('box-'+currentHour).classList.add('active');
     }
 
-    setImage(1);
+    function changeFrame(dir) {
+        setFrame(currentHour + dir);
+    }
 
-    // --- KEYBOARD NAV ---
+    function togglePlay() {
+        isPlaying = !isPlaying;
+        document.getElementById('playBtn').innerText = isPlaying ? "Pause" : "Play";
+        if(isPlaying) {
+            timer = setInterval(() => changeFrame(1), 500);
+        } else {
+            clearInterval(timer);
+        }
+    }
+
+    // Initialize
+    setFrame(1);
+    
+    // Keyboard nav
     document.addEventListener('keydown', (e) => {
-        let currentSrc = imgElement.src;
-        let match = currentSrc.match(/recovery_f(\d+)\.png/);
-        if (!match) return;
-        
-        let currentFhr = parseInt(match[1]);
-
-        if (e.key === "ArrowRight") {
-            let next = currentFhr + 1;
-            if (next <= totalHours) setImage(next);
-        } else if (e.key === "ArrowLeft") {
-            let prev = currentFhr - 1;
-            if (prev >= 1) setImage(prev);
-        }
+        if(e.key === "ArrowLeft") changeFrame(-1);
+        if(e.key === "ArrowRight") changeFrame(1);
     });
-
-    // --- GIF GENERATOR ---
-    async function generateGIF() {
-        btn.disabled = true;
-        btn.textContent = "Loading...";
-        
-        try {
-            const workerResponse = await fetch('https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js');
-            const workerBlob = await workerResponse.blob();
-            const workerUrl = URL.createObjectURL(workerBlob);
-
-            const gif = new GIF({
-                workers: 2,
-                quality: 10,
-                workerScript: workerUrl,
-                width: imgElement.naturalWidth || 1000,
-                height: imgElement.naturalHeight || 800
-            });
-
-            for (let i = 1; i <= totalHours; i++) {
-                const fhrStr = String(i).padStart(2, '0');
-                const filename = `recovery_f${fhrStr}.png`;
-                const url = imageDir + filename;
-                
-                const percent = Math.round((i / totalHours) * 100);
-                btn.textContent = `Building (${percent}%)...`;
-
-                const img = new Image();
-                img.crossOrigin = "Anonymous";
-                await new Promise((resolve) => {
-                    img.onload = () => { gif.addFrame(img, {delay: 200}); resolve(); };
-                    img.onerror = () => { resolve(); }; 
-                    img.src = url;
-                });
-            }
-
-            btn.textContent = "Rendering...";
-            gif.on('finished', function(blob) {
-                const link = document.createElement('a');
-                link.href = URL.createObjectURL(blob);
-                link.download = `fire_recovery_loop.gif`;
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                btn.textContent = "Download Animated GIF";
-                btn.disabled = false;
-                URL.revokeObjectURL(workerUrl);
-            });
-            gif.render();
-        } catch (e) {
-            alert("Error generating GIF.");
-            btn.disabled = false;
-        }
-    }
 </script>
+
 </body>
 </html>
