@@ -2,8 +2,9 @@ name: Nighttime Recovery Map
 
 on:
   schedule:
-    - cron: '0 10 * * *'  # Run daily at 10 AM UTC
-  workflow_dispatch:      # Allows manual run button
+    # Runs at 00:30 and 15:30 UTC every day
+    - cron: '30 0,15 * * *'
+  workflow_dispatch: # Allows manual run button
 
 permissions:
   contents: write
@@ -16,22 +17,16 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v3
 
-    # We use Conda because weather libraries (eccodes) require it
-    - name: Setup Conda Environment
-      uses: conda-incubator/setup-miniconda@v2
+    - name: Set up Python
+      uses: actions/setup-python@v4
       with:
-        activate-environment: fire-env
-        python-version: 3.9
-        channels: conda-forge
+        python-version: '3.9'
 
     - name: Install Dependencies
-      shell: bash -l {0}
       run: |
-        conda install -y eccodes
         pip install -r requirements.txt
 
     - name: Run Map Script
-      shell: bash -l {0}
       run: python scripts/main.py
 
     - name: Deploy to GitHub Pages
