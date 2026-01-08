@@ -68,7 +68,6 @@ def calculate_emc(T_degF, RH_percent):
 def prepare_fuel_grid(fuel_path, lats, lons):
     """Loads and resamples the fuel grid to match weather coordinates."""
     # print("Sampling Fuel Map...") 
-    # Commented out print to reduce log spam, enable if debugging
     with rasterio.open(fuel_path) as src:
         flat_lons = lons.ravel()
         flat_lats = lats.ravel()
@@ -230,7 +229,6 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
         r_moe, r_mask = prepare_fuel_grid(FUEL_PATH, r_lats, r_lons)
         
         # Note: RTMA variable names can vary. Usually 't2m'/'d2m' or '2t'/'2d'.
-        # xarray/cfgrib usually standardizes to t2m/d2m but check keys if it fails.
         t_var = 't2m' if 't2m' in ds_rtma_sub else '2t'
         d_var = 'd2m' if 'd2m' in ds_rtma_sub else '2d'
         
@@ -249,6 +247,25 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
     finally:
         if os.path.exists("verif_href.grib2"): os.remove("verif_href.grib2")
         if os.path.exists("verif_rtma.grib2"): os.remove("verif_rtma.grib2")
+
+def preserve_verification():
+    """Downloads the existing verification image so it isn't deleted during early runs."""
+    url = "https://nluchetti1.github.io/fire-recovery-map/images/verification_09z.png"
+    save_path = os.path.join(IMAGE_DIR, "verification_09z.png")
+    
+    print("It is too early to verify today's 09Z data.")
+    print(f"Attempting to preserve existing image from: {url}")
+    
+    try:
+        r = requests.get(url)
+        if r.status_code == 200:
+            with open(save_path, 'wb') as f:
+                f.write(r.content)
+            print("Success: Existing verification image preserved.")
+        else:
+            print(f"Warning: Could not preserve image (Status {r.status_code}). Maybe it doesn't exist yet?")
+    except Exception as e:
+        print(f"Warning: Preservation failed: {e}")
 
 def main():
     os.makedirs(IMAGE_DIR, exist_ok=True)
@@ -298,9 +315,16 @@ def main():
         finally:
             if os.path.exists(filename): os.remove(filename)
 
-    # --- RUN VERIFICATION (After Forecast is done) ---
-    if global_lats is not None:
-        run_verification_logic(global_moe, global_mask, global_lats, global_lons, y_slice, x_slice)
+    # --- INTELLIGENT VERIFICATION LOGIC ---
+    # We only run verification if it's past 13:00 UTC (1 PM UTC).
+    # This ensures the 09Z RTMA data is actually available.
+    # If it's earlier (e.g. the 03:30Z run), we just keep the old image.
+    
+    if now.hour >= 13:
+        if global_lats is not None:
+            run_verification_logic(global_moe, global_mask, global_lats, global_lons, y_slice, x_slice)
+    else:
+        preserve_verification()
 
 if __name__ == "__main__":
     import matplotlib
