@@ -15,7 +15,7 @@ try:
     
     print("Importing matplotlib (Headless Mode)...", flush=True)
     import matplotlib
-    matplotlib.use('Agg') # <--- CRITICAL FIX: Forces non-interactive mode
+    matplotlib.use('Agg') # Force non-interactive backend
     import matplotlib.pyplot as plt
     
     print("Importing cartopy...", flush=True)
@@ -41,6 +41,7 @@ def get_current_year_week():
     return year, week
 
 def download_latest_vhi():
+    # NOAA STAR Server
     base_url = "https://www.star.nesdis.noaa.gov/data/pub0018/VHPdata4users/data/Blended_VH_4km/geo_TIFF/"
     year, week = get_current_year_week()
     satellites = ['j01', 'npp']
@@ -78,30 +79,36 @@ def plot_vhi(tif_path, date_str):
     try:
         with rasterio.open(tif_path) as src:
             print(f"File Bounds: {src.bounds}", flush=True)
+            
+            # Calculate Slice
             window = from_bounds(PLOT_EXTENT[0], PLOT_EXTENT[2], 
                                  PLOT_EXTENT[1], PLOT_EXTENT[3], 
                                  transform=src.transform)
             
+            # Round Window
             window = window.round_offsets(op='round')
             window = Window(col_off=window.col_off, row_off=window.row_off, 
                             width=max(1, int(window.width)), 
                             height=max(1, int(window.height)))
             
             print(f"Calculated Window: {window}", flush=True)
+            
+            # Read Data
             data = src.read(1, window=window)
             
             if data.size == 0:
                 print("Error: Slicing resulted in empty data.", flush=True)
                 return
 
-            win_transform = src.window_transform(window)
-            height, width = data.shape
-            cols, rows = np.meshgrid(np.arange(width), np.arange(height))
-            xs, ys = rasterio.transform.xy(win_transform, rows, cols, offset='center')
-            lons = np.array(xs)
-            lats = np.array(ys)
-            
+            # Mask Invalid Values (VHI uses < 0 for NoData)
             data = np.where(data < 0, np.nan, data)
+            
+            # CRITICAL CHANGE: Get exact extent of the slice for imshow
+            # Returns (left, bottom, right, top)
+            win_bounds = src.window_bounds(window)
+            # Imshow expects [left, right, bottom, top]
+            extent = [win_bounds[0], win_bounds[2], win_bounds[1], win_bounds[3]]
+            print(f"Slice Extent: {extent}", flush=True)
 
         print("Initializing Plot...", flush=True)
         fig = plt.figure(figsize=(10, 8))
@@ -109,14 +116,19 @@ def plot_vhi(tif_path, date_str):
         ax.set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
         
         print("Adding Map Features...", flush=True)
-        ax.add_feature(cfeature.STATES, linewidth=1.5)
-        ax.add_feature(cfeature.COASTLINE, linewidth=1)
+        # Wrap features in try/except to prevent network timeouts from killing the script
+        try:
+            ax.add_feature(cfeature.STATES, linewidth=1.5, edgecolor='black')
+            ax.add_feature(cfeature.COASTLINE, linewidth=1, edgecolor='black')
+        except Exception as e:
+            print(f"Warning: Could not download map features: {e}", flush=True)
         
-        print("Rendering Data...", flush=True)
-        mesh = ax.pcolormesh(lons, lats, data, transform=ccrs.PlateCarree(), 
-                             cmap='RdYlGn', vmin=0, vmax=100, shading='auto')
+        print("Rendering Data (imshow)...", flush=True)
+        # Use imshow instead of pcolormesh for stability
+        ax.imshow(data, transform=ccrs.PlateCarree(), extent=extent, 
+                  origin='upper', cmap='RdYlGn', vmin=0, vmax=100)
         
-        plt.colorbar(mesh, label="Vegetation Health Index (VHI)", orientation='horizontal', pad=0.05, shrink=0.8)
+        plt.colorbar(label="Vegetation Health Index (VHI)", orientation='horizontal', pad=0.05, shrink=0.8)
         plt.title(f"NOAA STAR Vegetation Health (VIIRS)\nLatest Available: {date_str}")
         
         print("Saving Image...", flush=True)
