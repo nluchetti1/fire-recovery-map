@@ -1,0 +1,36 @@
+name: Test Integration (With VHI)
+
+on:
+  workflow_dispatch: # Manual Button
+
+jobs:
+  test-vhi-integration:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    # Dependencies for Cartopy/Gdal
+    - name: Install System Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libeccodes-dev libgdal-dev libgeos-dev libproj-dev
+
+    - name: Install Python Dependencies
+      run: |
+        pip install -r requirements.txt
+
+    - name: Run Integration Script
+      run: python scripts/test_integration.py
+
+    - name: Upload Maps for Inspection
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-maps-output
+        path: public/images/
