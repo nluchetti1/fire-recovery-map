@@ -16,23 +16,20 @@ jobs:
       with:
         python-version: '3.9'
 
-    # We need the same system libraries for Cartopy/Cfgrib
+    # CRITICAL FIX: Installing GDAL/GEOS/PROJ prevents the crash
     - name: Install System Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libeccodes-dev
+        sudo apt-get install -y libeccodes-dev libgdal-dev libgeos-dev libproj-dev
 
     - name: Install Python Dependencies
       run: |
         pip install -r requirements.txt
-        # If requests isn't in your requirements.txt, uncomment below:
-        # pip install requests
 
     - name: Run Test Script
       run: python scripts/test_vhi.py
 
     - name: Upload Test Map as Artifact
-      # Change @v3 to @v4
       uses: actions/upload-artifact@v4
       with:
         name: vhi-test-map
