@@ -32,8 +32,8 @@ jobs:
       run: python scripts/test_vhi.py
 
     - name: Upload Test Map as Artifact
-      # This saves the output image so you can download and look at it
-      uses: actions/upload-artifact@v3
+      # Change @v3 to @v4
+      uses: actions/upload-artifact@v4
       with:
         name: vhi-test-map
         path: vhi_test_map.png
