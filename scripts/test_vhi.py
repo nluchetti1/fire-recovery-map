@@ -100,13 +100,11 @@ def plot_vhi(tif_path, date_str):
                 print("Error: Slicing resulted in empty data.", flush=True)
                 return
 
-            # Mask Invalid Values (VHI uses < 0 for NoData)
+            # Mask Invalid Values
             data = np.where(data < 0, np.nan, data)
             
-            # CRITICAL CHANGE: Get exact extent of the slice for imshow
-            # Returns (left, bottom, right, top)
+            # Get exact extent for imshow
             win_bounds = src.window_bounds(window)
-            # Imshow expects [left, right, bottom, top]
             extent = [win_bounds[0], win_bounds[2], win_bounds[1], win_bounds[3]]
             print(f"Slice Extent: {extent}", flush=True)
 
@@ -116,7 +114,6 @@ def plot_vhi(tif_path, date_str):
         ax.set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
         
         print("Adding Map Features...", flush=True)
-        # Wrap features in try/except to prevent network timeouts from killing the script
         try:
             ax.add_feature(cfeature.STATES, linewidth=1.5, edgecolor='black')
             ax.add_feature(cfeature.COASTLINE, linewidth=1, edgecolor='black')
@@ -124,11 +121,14 @@ def plot_vhi(tif_path, date_str):
             print(f"Warning: Could not download map features: {e}", flush=True)
         
         print("Rendering Data (imshow)...", flush=True)
-        # Use imshow instead of pcolormesh for stability
-        ax.imshow(data, transform=ccrs.PlateCarree(), extent=extent, 
+        
+        # --- FIX: Capture the image object (im) ---
+        im = ax.imshow(data, transform=ccrs.PlateCarree(), extent=extent, 
                   origin='upper', cmap='RdYlGn', vmin=0, vmax=100)
         
-        plt.colorbar(label="Vegetation Health Index (VHI)", orientation='horizontal', pad=0.05, shrink=0.8)
+        # --- FIX: Pass 'im' to colorbar ---
+        plt.colorbar(im, label="Vegetation Health Index (VHI)", orientation='horizontal', pad=0.05, shrink=0.8)
+        
         plt.title(f"NOAA STAR Vegetation Health (VIIRS)\nLatest Available: {date_str}")
         
         print("Saving Image...", flush=True)
