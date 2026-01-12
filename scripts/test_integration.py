@@ -33,11 +33,16 @@ def get_current_year_week():
 
 def download_latest_vhi():
     """Downloads the latest weekly Vegetation Health Index (VHI) from NOAA."""
-    print("Searching for VHI data...")
+    print("Searching for VHI data...", flush=True)
     base_url = "https://www.star.nesdis.noaa.gov/data/pub0018/VHPdata4users/data/Blended_VH_4km/geo_TIFF/"
     year, week = get_current_year_week()
     satellites = ['j01', 'npp']
     
+    # Headers to look like a browser (avoids 403 Forbidden on some gov sites)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+    }
+
     # Try last 6 weeks
     for i in range(6):
         curr_week = week - i
@@ -50,18 +55,23 @@ def download_latest_vhi():
             fname = f"VHP.G04.C07.{sat}.P{curr_year}{curr_week:03d}.VH.VHI.tif"
             url = base_url + fname
             
+            print(f"  Checking: {url}", flush=True)
             try:
-                r = requests.get(url, stream=True, timeout=(10, 60))
+                r = requests.get(url, headers=headers, stream=True, timeout=(10, 60))
                 if r.status_code == 200:
-                    print(f"  Downloading VHI: {fname}")
+                    print(f"  SUCCESS! Downloading {fname}...", flush=True)
                     local_name = "current_vhi.tif"
                     with open(local_name, 'wb') as f:
                         for chunk in r.iter_content(chunk_size=1024*1024):
                             if chunk: f.write(chunk)
                     return local_name
-            except Exception:
+                else:
+                    print(f"  Status: {r.status_code} (Not Found)", flush=True)
+            except Exception as e:
+                print(f"  Error checking {url}: {e}", flush=True)
                 continue
-    print("  No VHI data found.")
+                
+    print("  CRITICAL: No VHI data found in last 6 weeks.", flush=True)
     return None
 
 def get_domain_slice(ds, extent):
@@ -119,7 +129,6 @@ def sample_grid(tif_path, lats, lons):
 
 def prepare_fuel_grid(fuel_path, lats, lons):
     """Loads Fuel Model and converts to MOE grid."""
-    # Use the generic sampler
     fuel_grid = sample_grid(fuel_path, lats, lons)
     
     moe_grid = np.zeros_like(fuel_grid, dtype=float)
@@ -157,9 +166,12 @@ def generate_recovery_map(t_k, d_k, moe_grid, valid_mask, vhi_grid=None):
     # --- VHI GREENUP LOGIC ---
     if vhi_grid is not None:
         # VHI > 60 indicates healthy vegetation.
-        # We assume this overrides dead fuel moisture (effectively unburnable/high recovery).
         # We use np.maximum to ensure we don't accidentally lower a good recovery.
-        greenup_mask = (vhi_grid >= 60)
+        # Handle potential NaNs in VHI grid
+        vhi_clean = np.nan_to_num(vhi_grid, nan=0.0)
+        greenup_mask = (vhi_clean >= 60)
+        
+        # Apply the mask: Force 100% recovery where green
         recovery = np.where(greenup_mask, 100.0, recovery)
 
     return np.where(valid_mask, recovery, np.nan)
@@ -271,9 +283,9 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl, vhi
         r_moe, r_mask = prepare_fuel_grid(FUEL_PATH, r_lats, r_lons)
         
         # --- SAMPLE VHI TO RTMA GRID ---
-        # We need to resample VHI to the RTMA grid for apples-to-apples comparison
-        # (Assuming VHI file is still present locally as "current_vhi.tif")
-        r_vhi = sample_grid("current_vhi.tif", r_lats, r_lons)
+        r_vhi = None
+        if os.path.exists("current_vhi.tif"):
+             r_vhi = sample_grid("current_vhi.tif", r_lats, r_lons)
 
         t_var = 't2m' if 't2m' in ds_rtma_sub else '2t'
         d_var = 'd2m' if 'd2m' in ds_rtma_sub else '2d'
@@ -307,7 +319,7 @@ def main():
     
     global_lats, global_lons = None, None
     global_moe, global_mask = None, None
-    global_vhi = None # Store the sampled VHI grid
+    global_vhi = None 
     y_slice, x_slice = None, None 
 
     # --- 48 HOUR FORECAST LOOP ---
@@ -352,7 +364,6 @@ def main():
             if os.path.exists(filename): os.remove(filename)
 
     # --- ALWAYS RUN VERIFICATION FOR TEST ---
-    # For testing purposes, we skip the time check so you can verify the logic works.
     if global_lats is not None:
         run_verification_logic(global_moe, global_mask, global_lats, global_lons, y_slice, x_slice, global_vhi)
 
