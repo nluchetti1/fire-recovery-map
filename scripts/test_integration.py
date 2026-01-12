@@ -32,7 +32,7 @@ def get_current_year_week():
     return year, week
 
 def download_file_curl(url, local_filename):
-    """Uses system curl to download, which often bypasses 403 blocks better than python requests."""
+    """Uses system curl. Supports both HTTP and FTP."""
     try:
         # -f: Fail silently on server errors (so we can catch 404s)
         # -L: Follow redirects
@@ -43,9 +43,10 @@ def download_file_curl(url, local_filename):
             "-o", local_filename, 
             url
         ]
+        # Run curl. If it fails (404/403), it raises CalledProcessError because of -f
         subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
-        # Verify file isn't empty (curl -f might still leave a 0-byte file on some errors)
+        # Double check file size (sometimes curl creates empty files on error)
         if os.path.exists(local_filename) and os.path.getsize(local_filename) > 1000:
             return True
         return False
@@ -53,14 +54,14 @@ def download_file_curl(url, local_filename):
         return False
 
 def download_latest_vhi():
-    """Downloads the latest weekly Vegetation Health Index (VHI) using curl."""
+    """Downloads the latest VHI data, prioritizing FTP to bypass HTTP blocks."""
     print("Searching for VHI data...", flush=True)
     
-    # --- UPDATED URL (The old pub0018 path was removed) ---
-    base_url_http = "https://www.star.nesdis.noaa.gov/pub/corp/scsb/wguo/data/Blended_VH_4km/geo_TIFF/"
-    
-    # Fallback FTP (Matches the new structure)
+    # 1. FTP Source (Most likely to work when HTTP is 403 Forbidden)
     base_url_ftp = "ftp://ftp.star.nesdis.noaa.gov/pub/corp/scsb/wguo/data/Blended_VH_4km/geo_TIFF/"
+    
+    # 2. HTTP Source (New Location you found, currently 403 but might open up)
+    base_url_http = "https://www.star.nesdis.noaa.gov/pub/corp/scsb/wguo/data/Blended_VH_4km/geo_TIFF/"
     
     year, week = get_current_year_week()
     satellites = ['j01', 'npp']
@@ -77,20 +78,20 @@ def download_latest_vhi():
             fname = f"VHP.G04.C07.{sat}.P{curr_year}{curr_week:03d}.VH.VHI.tif"
             local_name = "current_vhi.tif"
             
-            # 1. Try HTTP with Curl (New URL)
-            url_http = base_url_http + fname
-            print(f"  Checking HTTP: {url_http}", flush=True)
-            if download_file_curl(url_http, local_name):
-                print(f"  SUCCESS! Downloaded {fname}", flush=True)
-                return local_name
-            
-            # 2. Try FTP with Curl (Fallback)
+            # ATTEMPT 1: FTP (The Bypass)
             url_ftp = base_url_ftp + fname
             print(f"  Checking FTP:  {url_ftp}", flush=True)
             if download_file_curl(url_ftp, local_name):
                 print(f"  SUCCESS (FTP)! Downloaded {fname}", flush=True)
                 return local_name
 
+            # ATTEMPT 2: HTTP (Backup)
+            url_http = base_url_http + fname
+            print(f"  Checking HTTP: {url_http}", flush=True)
+            if download_file_curl(url_http, local_name):
+                print(f"  SUCCESS (HTTP)! Downloaded {fname}", flush=True)
+                return local_name
+                
     print("  CRITICAL: No VHI data found in last 6 weeks.", flush=True)
     return None
 
@@ -316,7 +317,7 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl, vhi
 def main():
     os.makedirs(IMAGE_DIR, exist_ok=True)
     
-    # 1. DOWNLOAD VHI (Using Curl)
+    # 1. DOWNLOAD VHI (Priority FTP)
     vhi_path = download_latest_vhi()
     
     now = datetime.utcnow()
