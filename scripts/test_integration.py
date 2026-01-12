@@ -4,6 +4,7 @@ import numpy as np
 import xarray as xr
 import rasterio
 import requests
+import subprocess
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import cartopy.crs as ccrs
@@ -16,7 +17,6 @@ FUEL_PATH = 'data/fuel_SE_fbfm40.tif'
 IMAGE_DIR = 'public/images'
 PLOT_EXTENT = [-85.0, -75.0, 31.0, 37.5] 
 
-# MOE Lookup for Scott & Burgan 40 (FBFM40)
 MOE_LOOKUP = {
     101: 15, 102: 15, 103: 30, 104: 15, 105: 40, 106: 40, 107: 15, 108: 30, 109: 40,
     121: 15, 122: 15, 123: 40, 124: 40,
@@ -31,18 +31,40 @@ def get_current_year_week():
     year, week, _ = today.isocalendar()
     return year, week
 
+def download_file_curl(url, local_filename):
+    """Uses system curl to download, which often bypasses 403 blocks better than python requests."""
+    try:
+        # -f: Fail silently on server errors (so we can catch 404s)
+        # -L: Follow redirects
+        # -A: Spoof User-Agent
+        cmd = [
+            "curl", "-f", "-L", 
+            "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", 
+            "-o", local_filename, 
+            url
+        ]
+        subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        # Verify file isn't empty (curl -f might still leave a 0-byte file on some errors)
+        if os.path.exists(local_filename) and os.path.getsize(local_filename) > 1000:
+            return True
+        return False
+    except subprocess.CalledProcessError:
+        return False
+
 def download_latest_vhi():
-    """Downloads the latest weekly Vegetation Health Index (VHI) from NOAA."""
+    """Downloads the latest weekly Vegetation Health Index (VHI) using curl."""
     print("Searching for VHI data...", flush=True)
-    base_url = "https://www.star.nesdis.noaa.gov/data/pub0018/VHPdata4users/data/Blended_VH_4km/geo_TIFF/"
+    
+    # --- UPDATED URL (The old pub0018 path was removed) ---
+    base_url_http = "https://www.star.nesdis.noaa.gov/pub/corp/scsb/wguo/data/Blended_VH_4km/geo_TIFF/"
+    
+    # Fallback FTP (Matches the new structure)
+    base_url_ftp = "ftp://ftp.star.nesdis.noaa.gov/pub/corp/scsb/wguo/data/Blended_VH_4km/geo_TIFF/"
+    
     year, week = get_current_year_week()
     satellites = ['j01', 'npp']
     
-    # Headers to look like a browser (avoids 403 Forbidden on some gov sites)
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
-    }
-
     # Try last 6 weeks
     for i in range(6):
         curr_week = week - i
@@ -53,24 +75,22 @@ def download_latest_vhi():
             
         for sat in satellites:
             fname = f"VHP.G04.C07.{sat}.P{curr_year}{curr_week:03d}.VH.VHI.tif"
-            url = base_url + fname
+            local_name = "current_vhi.tif"
             
-            print(f"  Checking: {url}", flush=True)
-            try:
-                r = requests.get(url, headers=headers, stream=True, timeout=(10, 60))
-                if r.status_code == 200:
-                    print(f"  SUCCESS! Downloading {fname}...", flush=True)
-                    local_name = "current_vhi.tif"
-                    with open(local_name, 'wb') as f:
-                        for chunk in r.iter_content(chunk_size=1024*1024):
-                            if chunk: f.write(chunk)
-                    return local_name
-                else:
-                    print(f"  Status: {r.status_code} (Not Found)", flush=True)
-            except Exception as e:
-                print(f"  Error checking {url}: {e}", flush=True)
-                continue
-                
+            # 1. Try HTTP with Curl (New URL)
+            url_http = base_url_http + fname
+            print(f"  Checking HTTP: {url_http}", flush=True)
+            if download_file_curl(url_http, local_name):
+                print(f"  SUCCESS! Downloaded {fname}", flush=True)
+                return local_name
+            
+            # 2. Try FTP with Curl (Fallback)
+            url_ftp = base_url_ftp + fname
+            print(f"  Checking FTP:  {url_ftp}", flush=True)
+            if download_file_curl(url_ftp, local_name):
+                print(f"  SUCCESS (FTP)! Downloaded {fname}", flush=True)
+                return local_name
+
     print("  CRITICAL: No VHI data found in last 6 weeks.", flush=True)
     return None
 
@@ -122,7 +142,6 @@ def sample_grid(tif_path, lats, lons):
         flat_lats = lats.ravel()
         coords = zip(flat_lons, flat_lats)
         sampled = src.sample(coords)
-        # Use float32 for VHI/Data, uint16 for Fuel IDs
         data_flat = np.fromiter((val[0] for val in sampled), dtype=np.float32)
         
     return data_flat.reshape(lats.shape)
@@ -165,13 +184,8 @@ def generate_recovery_map(t_k, d_k, moe_grid, valid_mask, vhi_grid=None):
     
     # --- VHI GREENUP LOGIC ---
     if vhi_grid is not None:
-        # VHI > 60 indicates healthy vegetation.
-        # We use np.maximum to ensure we don't accidentally lower a good recovery.
-        # Handle potential NaNs in VHI grid
         vhi_clean = np.nan_to_num(vhi_grid, nan=0.0)
         greenup_mask = (vhi_clean >= 60)
-        
-        # Apply the mask: Force 100% recovery where green
         recovery = np.where(greenup_mask, 100.0, recovery)
 
     return np.where(valid_mask, recovery, np.nan)
@@ -263,15 +277,11 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl, vhi
         ds_href = xr.open_dataset(href_file, engine='cfgrib', 
                                   filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2})
         
-        # SLICE using the indices passed from Main Loop (Robust)
         ds_href_sub = ds_href.isel(y=y_sl, x=x_sl)
-        
-        # Apply VHI to Forecast Verification
         rec_href = generate_recovery_map(ds_href_sub['t2m'].values, ds_href_sub['d2m'].values, moe_grid, valid_mask, vhi_grid)
         
         # --- PROCESS RTMA (Observed) ---
         ds_rtma = xr.open_dataset(rtma_file, engine='cfgrib')
-        
         r_ysl, r_xsl = get_domain_slice(ds_rtma, PLOT_EXTENT)
         ds_rtma_sub = ds_rtma.isel(y=r_ysl, x=r_xsl)
         
@@ -279,7 +289,6 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl, vhi
         r_lons = ds_rtma_sub.longitude.values
         r_lons = np.where(r_lons > 180, r_lons - 360, r_lons)
         
-        # Generate Fuel Mask specifically for RTMA points
         r_moe, r_mask = prepare_fuel_grid(FUEL_PATH, r_lats, r_lons)
         
         # --- SAMPLE VHI TO RTMA GRID ---
@@ -290,9 +299,7 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl, vhi
         t_var = 't2m' if 't2m' in ds_rtma_sub else '2t'
         d_var = 'd2m' if 'd2m' in ds_rtma_sub else '2d'
         
-        # Apply VHI to Observed Verification
         rec_rtma = generate_recovery_map(ds_rtma_sub[t_var].values, ds_rtma_sub[d_var].values, r_moe, r_mask, r_vhi)
-        
         plot_verification(rec_href, h_lats, h_lons, rec_rtma, r_lats, r_lons, f"{today_str} 09:00")
         
         ds_href.close()
@@ -309,7 +316,7 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl, vhi
 def main():
     os.makedirs(IMAGE_DIR, exist_ok=True)
     
-    # 1. DOWNLOAD VHI
+    # 1. DOWNLOAD VHI (Using Curl)
     vhi_path = download_latest_vhi()
     
     now = datetime.utcnow()
@@ -352,7 +359,6 @@ def main():
             else:
                 ds_sub = ds.isel(y=y_slice, x=x_slice)
 
-            # Pass VHI grid to calculation
             recovery = generate_recovery_map(ds_sub['t2m'].values, ds_sub['d2m'].values, global_moe, global_mask, global_vhi)
             
             generate_main_plot(recovery, global_lats, global_lons, ds_sub.valid_time.values, fhr, run_info)
@@ -363,11 +369,9 @@ def main():
         finally:
             if os.path.exists(filename): os.remove(filename)
 
-    # --- ALWAYS RUN VERIFICATION FOR TEST ---
     if global_lats is not None:
         run_verification_logic(global_moe, global_mask, global_lats, global_lons, y_slice, x_slice, global_vhi)
 
-    # Cleanup VHI
     if vhi_path and os.path.exists(vhi_path):
         os.remove(vhi_path)
 
