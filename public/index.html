@@ -29,6 +29,22 @@
             margin-bottom: 10px;
             font-size: 14px;
         }
+        
+        .left-controls {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        #model-select {
+            padding: 5px 10px;
+            border-radius: 4px;
+            border: 1px solid #ced4da;
+            font-weight: bold;
+            font-size: 14px;
+            cursor: pointer;
+            background-color: white;
+        }
 
         .btn-green {
             background-color: #28a745;
@@ -46,7 +62,7 @@
         /* GRID LAYOUT FOR BUTTONS */
         .timeline-grid {
             display: grid;
-            grid-template-columns: repeat(24, 1fr); /* 24 columns for 2 rows of 24 */
+            grid-template-columns: repeat(24, 1fr); 
             gap: 2px;
             width: 100%;
             max-width: 1000px;
@@ -90,7 +106,7 @@
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
             position: relative; 
             min-height: 500px;
-            margin-bottom: 40px; /* Added margin for spacing below */
+            margin-bottom: 40px; 
         }
         
         #forecast-img {
@@ -139,8 +155,14 @@
     <h2>Nighttime Fuel Recovery Forecast</h2>
     
     <div class="controls-header">
-        <div>
-            <strong>Hover/Click</strong> to view | <strong>Arrows</strong> to navigate
+        <div class="left-controls">
+            <select id="model-select" onchange="updateModel()">
+                <option value="href">HREF Ensemble</option>
+                <option value="ndfd">NWS NDFD</option>
+            </select>
+            <div>
+                <strong>Hover/Click</strong> to view | <strong>Arrows</strong> to navigate
+            </div>
         </div>
         <button class="btn-green" id="download-btn" onclick="generateGIF()">Download Animated GIF</button>
     </div>
@@ -163,7 +185,7 @@
              src="images/verification_09z.png" 
              alt="Verification Map - Pending Generation"
              onerror="this.parentElement.style.display='none'"> 
-             </div>
+    </div>
 
 <script>
     const totalHours = 48; 
@@ -173,11 +195,23 @@
     const loader = document.getElementById('loader');
     const btn = document.getElementById('download-btn');
     let boxes = [];
+    let currentModel = "href";
+
+    // --- HANDLE DROPDOWN CHANGE ---
+    function updateModel() {
+        currentModel = document.getElementById('model-select').value;
+        let activeFhr = 1;
+        const activeBox = document.querySelector('.time-box.active');
+        if (activeBox) {
+            activeFhr = parseInt(activeBox.id.split('-')[1]);
+        }
+        setImage(activeFhr);
+    }
 
     // --- SWITCH IMAGE ---
     function setImage(fhr) {
         const fhrStr = String(fhr).padStart(2, '0');
-        const filename = `recovery_f${fhrStr}.png`;
+        const filename = `${currentModel}_recovery_f${fhrStr}.png`;
         
         loader.style.display = 'flex';
         imgElement.style.display = 'block';
@@ -210,6 +244,7 @@
     // --- KEYBOARD NAV ---
     document.addEventListener('keydown', (e) => {
         let currentSrc = imgElement.src;
+        // Adjusted match logic since both filenames end in recovery_fXX.png
         let match = currentSrc.match(/recovery_f(\d+)\.png/);
         if (!match) return;
         
@@ -244,7 +279,7 @@
 
             for (let i = 1; i <= totalHours; i++) {
                 const fhrStr = String(i).padStart(2, '0');
-                const filename = `recovery_f${fhrStr}.png`;
+                const filename = `${currentModel}_recovery_f${fhrStr}.png`;
                 const url = imageDir + filename;
                 
                 const percent = Math.round((i / totalHours) * 100);
@@ -263,7 +298,7 @@
             gif.on('finished', function(blob) {
                 const link = document.createElement('a');
                 link.href = URL.createObjectURL(blob);
-                link.download = `fire_recovery_loop.gif`;
+                link.download = `${currentModel}_fire_recovery_loop.gif`;
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
