@@ -186,7 +186,6 @@ def generate_main_plot(recovery_grid, lats, lons, valid_time, fhr, run_str, mode
     print(f"Saved {filename}")
 
 def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
-    # (Unchanged Verification logic)
     print("--- Starting Verification ---")
     today = datetime.utcnow().date()
     today_str = today.strftime("%Y%m%d")
@@ -297,7 +296,6 @@ def main():
 
             recovery = generate_recovery_map(ds_sub['t2m'].values, ds_sub['d2m'].values, global_moe, global_mask)
             
-            # Use specific model kwarg
             generate_main_plot(recovery, global_lats, global_lons, ds_sub.valid_time.values, fhr, run_info, model="HREF")
             ds.close()
 
@@ -306,56 +304,57 @@ def main():
         finally:
             if os.path.exists(filename): os.remove(filename)
 
-    # --- 2. NDFD FORECAST LOOP ---
+    # --- 2. NDFD FORECAST LOOP (Using TGFTP Workaround) ---
     print("--- Processing NDFD ---")
-    # NDFD CONUS grids on NOMADS usually compile 1-72 forecast hours into a single grib2 file
-    ndfd_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/ndfd/prod/ndfd.{date_str}/ndfd.t{run_cycle}z.awp2p5.tm00.grib2"
-    ndfd_filename = f"ndfd_t{run_cycle}z.grib2"
-    ndfd_grib = download_file(ndfd_url, ndfd_filename)
+    
+    ndfd_temp_url = "https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus/VP.001-003/ds.temp.bin"
+    ndfd_rh_url = "https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus/VP.001-003/ds.rhm.bin"
+    
+    temp_file = download_file(ndfd_temp_url, "ndfd_temp.grib2")
+    rh_file = download_file(ndfd_rh_url, "ndfd_rh.grib2")
 
-    if ndfd_grib:
+    if temp_file and rh_file:
         try:
-            # Note: cfgrib can be sensitive to variables with different dimension structures. 
-            # We filter for 2m level for safety to pull Temperature ('2t'/'t2m') and RH ('2r'/'r2'/'rh2m').
-            ds_ndfd = xr.open_dataset(ndfd_grib, engine='cfgrib', 
-                                      filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2, 'stepType': 'instant'})
-            
-            t_var = 't2m' if 't2m' in ds_ndfd else '2t' if '2t' in ds_ndfd else None
-            r_var = 'r2' if 'r2' in ds_ndfd else '2r' if '2r' in ds_ndfd else 'rh2m' if 'rh2m' in ds_ndfd else None
+            ds_t = xr.open_dataset(temp_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': '2t'}})
+            ds_rh = xr.open_dataset(rh_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': '2r'}})
 
-            if t_var and r_var:
-                n_ysl, n_xsl = get_domain_slice(ds_ndfd, PLOT_EXTENT)
-                ds_sub_ndfd = ds_ndfd.isel(y=n_ysl, x=n_xsl)
-                
-                n_lats = ds_sub_ndfd.latitude.values
-                n_lons = ds_sub_ndfd.longitude.values
-                n_lons = np.where(n_lons > 180, n_lons - 360, n_lons)
-                
-                n_moe, n_mask = prepare_fuel_grid(FUEL_PATH, n_lats, n_lons)
-
-                if 'step' in ds_sub_ndfd.dims:
-                    # Iterate through the forecast hours packaged inside the single NDFD grib file
-                    for step_idx in range(len(ds_sub_ndfd.step)):
-                        step_val = ds_sub_ndfd.step[step_idx].values
-                        # convert timedelta object to integer hours
-                        fhr = int(step_val / np.timedelta64(1, 'h'))
-                        
-                        if 1 <= fhr <= 48:
-                            t_data = ds_sub_ndfd[t_var].isel(step=step_idx).values
-                            rh_data = ds_sub_ndfd[r_var].isel(step=step_idx).values
-                            valid_time = ds_sub_ndfd.valid_time.isel(step=step_idx).values
-                            
-                            recovery = generate_recovery_map_from_rh(t_data, rh_data, n_moe, n_mask)
-                            generate_main_plot(recovery, n_lats, n_lons, valid_time, fhr, run_info, model="NDFD")
-            else:
-                print("Skipping NDFD - Standard Temp/RH variables were not found in the dataset.")
+            n_ysl, n_xsl = get_domain_slice(ds_t, PLOT_EXTENT)
+            ds_t_sub = ds_t.isel(y=n_ysl, x=n_xsl)
+            ds_rh_sub = ds_rh.isel(y=n_ysl, x=n_xsl)
             
-            ds_ndfd.close()
+            n_lats = ds_t_sub.latitude.values
+            n_lons = ds_t_sub.longitude.values
+            n_lons = np.where(n_lons > 180, n_lons - 360, n_lons)
+            
+            n_moe, n_mask = prepare_fuel_grid(FUEL_PATH, n_lats, n_lons)
+
+            valid_times_t = ds_t_sub.valid_time.values
+            valid_times_rh = ds_rh_sub.valid_time.values
+            common_times = np.intersect1d(valid_times_t, valid_times_rh)
+
+            fhr = 1
+            for v_time in common_times:
+                if fhr > 48: break 
+                
+                t_step = ds_t_sub.sel(valid_time=v_time)
+                rh_step = ds_rh_sub.sel(valid_time=v_time)
+                
+                t_data = t_step['t2m'].values if 't2m' in t_step.data_vars else t_step['2t'].values
+                rh_data = rh_step['r2'].values if 'r2' in rh_step.data_vars else rh_step['2r'].values
+                
+                recovery = generate_recovery_map_from_rh(t_data, rh_data, n_moe, n_mask)
+                generate_main_plot(recovery, n_lats, n_lons, v_time, fhr, run_info, model="NDFD")
+                
+                fhr += 1
+                
+            ds_t.close()
+            ds_rh.close()
+            
         except Exception as e:
             print(f"Error processing NDFD: {e}")
         finally:
-            if os.path.exists(ndfd_filename): os.remove(ndfd_filename)
-
+            if os.path.exists(temp_file): os.remove(temp_file)
+            if os.path.exists(rh_file): os.remove(rh_file)
 
     # --- INTELLIGENT VERIFICATION LOGIC ---
     if now.hour >= 13:
