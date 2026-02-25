@@ -27,7 +27,6 @@ MOE_LOOKUP = {
 }
 
 def get_domain_slice(ds, extent):
-    """Finds x/y indices for the extent."""
     lats = ds.latitude.values
     lons = ds.longitude.values
     lons = np.where(lons > 180, lons - 360, lons)
@@ -66,7 +65,6 @@ def calculate_emc(T_degF, RH_percent):
     return np.clip(emc, 0, 35)
 
 def prepare_fuel_grid(fuel_path, lats, lons):
-    """Loads and resamples the fuel grid to match weather coordinates."""
     with rasterio.open(fuel_path) as src:
         flat_lons = lons.ravel()
         flat_lats = lats.ravel()
@@ -75,21 +73,18 @@ def prepare_fuel_grid(fuel_path, lats, lons):
         fuel_flat = np.fromiter((val[0] for val in sampled), dtype=np.uint16)
         
     fuel_grid = fuel_flat.reshape(lats.shape)
-    
     moe_grid = np.zeros_like(fuel_grid, dtype=float)
     for fid, moe_val in MOE_LOOKUP.items():
         moe_grid[fuel_grid == fid] = moe_val
         
     valid_mask = (fuel_grid >= 101) & (fuel_grid <= 204)
     moe_grid[~valid_mask] = 999 
-    
     return moe_grid, valid_mask
 
 def download_file(url, local_filename):
     print(f"Downloading from: {url}")
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': '*/*'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
     try:
         with requests.get(url, stream=True, timeout=60, headers=headers) as r:
@@ -97,11 +92,39 @@ def download_file(url, local_filename):
             with open(local_filename, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     f.write(chunk)
-        print(f" -> Success! Saved as {local_filename}")
+        print(f" -> Success: {local_filename}")
         return local_filename
     except Exception as e:
         print(f" -> Failed: {e}")
         return None
+
+def fetch_ndfd_archive(today_str, extent):
+    file_names = ["ndfd.t00z.awp2p5.grib2", "ndfd.t00z.awp2p5.tm00.grib2"]
+    
+    # Tier 1: NOMADS Server-Side Subsetter (Fastest, avoids memory issues)
+    base_filter_url = "https://nomads.ncep.noaa.gov/cgi-bin/filter_ndfd.pl"
+    params = [
+        "lev_2_m_above_ground=on", "var_RH=on", "var_TMP=on", "subregion=",
+        f"leftlon={extent[0]-1}", f"rightlon={extent[1]+1}",
+        f"toplat={extent[3]+1}", f"bottomlat={extent[2]-1}",
+        f"dir=%2Fndfd.{today_str}"
+    ]
+    
+    for fname in file_names:
+        url = f"{base_filter_url}?file={fname}&{'&'.join(params)}"
+        dl = download_file(url, f"ndfd_subset_{fname}.grib2")
+        if dl and os.path.getsize(dl) > 10000: # Must be larger than an HTML error page
+            return dl
+        if dl: os.remove(dl) # Clean up bad download
+
+    # Tier 2: NCEP FTP Direct (Bypasses firewall blocks entirely)
+    for fname in file_names:
+        url = f"https://ftp.ncep.noaa.gov/data/nccf/com/ndfd/prod/ndfd.{today_str}/{fname}"
+        dl = download_file(url, "ndfd_full.grib2")
+        if dl and os.path.getsize(dl) > 100000:
+            return dl
+            
+    return None
 
 def generate_recovery_map(t_k, d_k, moe_grid, valid_mask):
     rh = calculate_rh(t_k, d_k)
@@ -115,6 +138,19 @@ def generate_recovery_map_from_rh(t_k, rh, moe_grid, valid_mask):
     fm = calculate_emc(t_f, rh)
     recovery = (fm / moe_grid) * 100
     return np.where(valid_mask, recovery, np.nan)
+
+def generate_error_verification_plot(model_name, valid_time_str, message):
+    """Guarantees a fallback graphic so the website does not display a broken image link."""
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.text(0.5, 0.5, message, horizontalalignment='center', verticalalignment='center', 
+            fontsize=16, color='#d32f2f', fontweight='bold', ha='center', wrap=True)
+    ax.set_title(f"{model_name.upper()} Verification Unavailable - Valid: {valid_time_str} UTC", fontweight='bold')
+    ax.axis('off')
+    
+    save_path = os.path.join(IMAGE_DIR, f"verification_{model_name.lower()}_09z.png")
+    plt.savefig(save_path, bbox_inches='tight', facecolor='#f8f9fa')
+    plt.close()
+    print(f"Saved Error Fallback Plot for {model_name.upper()}")
 
 def plot_verification(f_rec, f_lats, f_lons, o_rec, o_lats, o_lons, valid_time, model_name):
     fig, ax = plt.subplots(1, 2, figsize=(16, 8), 
@@ -183,13 +219,12 @@ def generate_main_plot(recovery_grid, lats, lons, valid_time, fhr, run_str, mode
     print(f"Saved {filename}")
 
 def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
-    print("--- Starting Verification ---")
+    print("\n--- Starting Verification ---")
     today = datetime.utcnow().date()
     today_str = today.strftime("%Y%m%d")
     fhr = 9
-    target_valid_time = np.datetime64(f"{today_str[:4]}-{today_str[4:6]}-{today_str[6:]}T09:00:00")
     
-    # 1. FETCH RTMA (OBSERVATIONS)
+    # 1. FETCH RTMA 
     rtma_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/rtma/prod/rtma2p5.{today_str}/rtma2p5.t09z.2dvaranl_ndfd.grb2_wexp"
     rtma_file = download_file(rtma_url, "verif_rtma.grib2")
     
@@ -212,11 +247,12 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
         rec_rtma = generate_recovery_map(ds_rtma_sub[t_var].values, ds_rtma_sub[d_var].values, r_moe, r_mask)
         ds_rtma.close()
 
-        # 2. VERIFY HREF
-        print("\n--- Running HREF Verification ---")
+        target_valid_time = np.datetime64(f"{today_str[:4]}-{today_str[4:6]}-{today_str[6:]}T09:00:00")
+
+        # -- VERIFY HREF --
+        print("\n[HREF Verification]")
         href_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/href/prod/href.{today_str}/ensprod/href.t00z.conus.mean.f{fhr:02d}.grib2"
         href_file = download_file(href_url, "verif_href.grib2")
-        
         if href_file:
             try:
                 ds_href = xr.open_dataset(href_file, engine='cfgrib', filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2})
@@ -225,29 +261,27 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
                 plot_verification(rec_href, h_lats, h_lons, rec_rtma, r_lats, r_lons, f"{today_str} 09:00", "href")
                 ds_href.close()
             except Exception as e:
-                print(f"HREF Extraction Failed: {e}")
+                print(f"HREF Verification Failed: {e}")
+                generate_error_verification_plot("href", f"{today_str} 09:00", f"HREF Verification Generation Failed:\n{e}")
 
-        # 3. VERIFY NDFD
-        print("\n--- Running NDFD Verification ---")
+        # -- VERIFY NDFD --
+        print("\n[NDFD Verification]")
         ndfd_verified = False
-        
-        # Route through NCEP FTP Server to completely bypass NOMADS 403 blocks
-        ndfd_archive_urls = [
-            f"https://ftp.ncep.noaa.gov/data/nccf/com/ndfd/prod/ndfd.{today_str}/ndfd.t00z.awp2p5.grib2",
-            f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/ndfd/prod/ndfd.{today_str}/ndfd.t00z.awp2p5.grib2"
-        ]
-        
-        ndfd_file = None
-        for url in ndfd_archive_urls:
-            ndfd_file = download_file(url, "verif_ndfd.grib2")
-            if ndfd_file: break
+        ndfd_file = fetch_ndfd_archive(today_str, PLOT_EXTENT)
             
         if ndfd_file:
             try:
-                print("Extracting NDFD Temp/RH arrays...")
-                ds_ndfd_t = xr.open_dataset(ndfd_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': '2t'}})
-                ds_ndfd_rh = xr.open_dataset(ndfd_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': '2r'}})
+                # Highly fault-tolerant extraction to deal with variable naming changes
+                try:
+                    ds_ndfd_t = xr.open_dataset(ndfd_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': '2t'}})
+                except:
+                    ds_ndfd_t = xr.open_dataset(ndfd_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': 't2m'}})
                 
+                try:
+                    ds_ndfd_rh = xr.open_dataset(ndfd_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': '2r'}})
+                except:
+                    ds_ndfd_rh = xr.open_dataset(ndfd_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': 'r2'}})
+
                 n_ysl, n_xsl = get_domain_slice(ds_ndfd_t, PLOT_EXTENT)
                 ds_t_sub = ds_ndfd_t.isel(y=n_ysl, x=n_xsl)
                 ds_rh_sub = ds_ndfd_rh.isel(y=n_ysl, x=n_xsl)
@@ -274,16 +308,16 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
                     plot_verification(rec_ndfd, n_lats, n_lons, rec_rtma, r_lats, r_lons, f"{today_str} 09:00", "ndfd")
                     ndfd_verified = True
                 else:
-                    print("ERROR: The 09Z verification time was not found within the downloaded NDFD 00Z Archive file.")
+                    print(f"Target 09Z time not found in {ndfd_file}. Available times: {valid_times_t}")
                 
                 ds_ndfd_t.close()
                 ds_ndfd_rh.close()
             except Exception as e:
                 print(f"NDFD Archive Extraction Failed: {e}")
 
-        # Fallback to TGFTP only if archive fails
+        # Tier 3: Fallback to TGFTP only if archive fails completely
         if not ndfd_verified:
-            print("Falling back to TGFTP live feed. Note: This will silently fail if it is past noon and the 09Z forecast has rolled off the server.")
+            print("Falling back to TGFTP rolling feed (Note: 09Z is often deleted by afternoon)...")
             t_file = download_file("https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus/VP.001-003/ds.temp.bin", "verif_ndfd_t.grib2")
             rh_file = download_file("https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus/VP.001-003/ds.rhm.bin", "verif_ndfd_rh.grib2")
             
@@ -316,6 +350,7 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
                         
                         rec_ndfd = generate_recovery_map_from_rh(t_data, rh_data, n_moe, n_mask)
                         plot_verification(rec_ndfd, n_lats, n_lons, rec_rtma, r_lats, r_lons, f"{today_str} 09:00", "ndfd")
+                        ndfd_verified = True
                     else:
                         print("Fallback Failed: The 09Z verification time has already been deleted from the rolling TGFTP server.")
                     
@@ -324,14 +359,15 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
                 except Exception as e:
                     print(f"TGFTP Extraction Failed: {e}")
 
+        # Tier 4: Output Guaranteed Error Graphic if All Failed
+        if not ndfd_verified:
+            generate_error_verification_plot("ndfd", f"{today_str} 09:00", "NDFD 00Z Archive Data is Currently\nUnavailable for Verification\n\n(NOAA file missing, delayed, or purged)")
+
     except Exception as e:
-        print(f"Verification Engine Failed: {e}")
+        print(f"Verification Engine Overall Failure: {e}")
     finally:
-        if os.path.exists("verif_href.grib2"): os.remove("verif_href.grib2")
-        if os.path.exists("verif_rtma.grib2"): os.remove("verif_rtma.grib2")
-        if os.path.exists("verif_ndfd.grib2"): os.remove("verif_ndfd.grib2")
-        if os.path.exists("verif_ndfd_t.grib2"): os.remove("verif_ndfd_t.grib2")
-        if os.path.exists("verif_ndfd_rh.grib2"): os.remove("verif_ndfd_rh.grib2")
+        for f in ["verif_href.grib2", "verif_rtma.grib2", "verif_ndfd.grib2", "verif_ndfd_t.grib2", "verif_ndfd_rh.grib2"]:
+            if os.path.exists(f): os.remove(f)
 
 def preserve_verification():
     for model in ["href", "ndfd"]:
@@ -385,7 +421,6 @@ def main():
                 ds_sub = ds.isel(y=y_slice, x=x_slice)
 
             recovery = generate_recovery_map(ds_sub['t2m'].values, ds_sub['d2m'].values, global_moe, global_mask)
-            
             generate_main_plot(recovery, global_lats, global_lons, ds_sub.valid_time.values, fhr, run_info, model="HREF")
             ds.close()
 
@@ -394,9 +429,8 @@ def main():
         finally:
             if os.path.exists(filename): os.remove(filename)
 
-    # --- 2. NDFD FORECAST LOOP (Using TGFTP Workaround) ---
+    # --- 2. NDFD FORECAST LOOP ---
     print("\n--- Processing NDFD ---")
-    
     ndfd_temp_url = "https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus/VP.001-003/ds.temp.bin"
     ndfd_rh_url = "https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus/VP.001-003/ds.rhm.bin"
     
@@ -445,12 +479,10 @@ def main():
                 
                 recovery = generate_recovery_map_from_rh(t_data, rh_data, n_moe, n_mask)
                 generate_main_plot(recovery, n_lats, n_lons, v_time, fhr, ndfd_run_info, model="NDFD")
-                
                 fhr += 1
                 
             ds_t.close()
             ds_rh.close()
-            
         except Exception as e:
             print(f"Error processing NDFD: {e}")
         finally:
