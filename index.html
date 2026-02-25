@@ -187,8 +187,7 @@
         <img class="verification-img" 
              id="verif-img"
              src="images/verification_href_09z.png" 
-             alt="Verification Map"
-             onerror="handleVerifError(this)"> 
+             alt="Verification Map"> 
     </div>
 
 <script>
@@ -200,11 +199,6 @@
     const btn = document.getElementById('download-btn');
     let boxes = [];
     let currentModel = "href";
-
-    // Elegantly hide verification section if the current model's image doesn't exist yet
-    function handleVerifError(imgElement) {
-        document.getElementById('verif-section').style.display = 'none';
-    }
 
     // --- HANDLE DROPDOWN CHANGE ---
     function updateModel() {
@@ -219,10 +213,8 @@
         // Update Verification Image and Title dynamically
         const verifImg = document.getElementById('verif-img');
         const verifTitle = document.getElementById('verif-title');
-        const verifSection = document.getElementById('verif-section');
         
-        if (verifImg && verifSection) {
-            verifSection.style.display = 'block'; // Reset visibility when swapping
+        if (verifImg) {
             verifImg.src = `${imageDir}verification_${currentModel}_09z.png`;
             verifTitle.innerText = `${currentModel.toUpperCase()} Daily Model Verification`;
         }
