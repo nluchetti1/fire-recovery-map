@@ -87,7 +87,6 @@ def prepare_fuel_grid(fuel_path, lats, lons):
 
 def download_file(url, local_filename):
     print(f"Downloading {local_filename}...")
-    # Using a User-Agent circumvents NOAA IP Blocks frequently experienced by GitHub Actions
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
@@ -196,13 +195,10 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
     
     fhr = 9
     
-    # DOWNLOADS
+    # 1. FETCH HREF & RTMA (Standard NOMADS)
     href_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/href/prod/href.{today_str}/ensprod/href.t00z.conus.mean.f{fhr:02d}.grib2"
     href_file = download_file(href_url, "verif_href.grib2")
     
-    ndfd_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/ndfd/prod/ndfd.{today_str}/ndfd.t00z.awp2p5.tm00.grib2"
-    ndfd_file = download_file(ndfd_url, "verif_ndfd.grib2")
-
     rtma_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/rtma/prod/rtma2p5.{today_str}/rtma2p5.t09z.2dvaranl_ndfd.grb2_wexp"
     rtma_file = download_file(rtma_url, "verif_rtma.grib2")
     
@@ -239,7 +235,20 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
             except Exception as e:
                 print(f"HREF Verification Failed: {e}")
 
-        # -- VERIFY NDFD --
+        # -- VERIFY NDFD (Dual-Layer Fallback System) --
+        ndfd_verified = False
+        
+        # Method 1: Try Multiple NOMADS Paths
+        ndfd_nomads_urls = [
+            f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/ndfd/prod/ndfd.{today_str}/ndfd.t00z.awp2p5.tm00.grib2",
+            f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/ndfd/prod/ndfd.{today_str}/ndfd.t00z.awp2p5.grib2"
+        ]
+        
+        ndfd_file = None
+        for url in ndfd_nomads_urls:
+            ndfd_file = download_file(url, "verif_ndfd.grib2")
+            if ndfd_file: break
+            
         if ndfd_file:
             try:
                 ds_ndfd_t = xr.open_dataset(ndfd_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': '2t'}})
@@ -269,13 +278,53 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
                     
                     rec_ndfd = generate_recovery_map_from_rh(t_data, rh_data, n_moe, n_mask)
                     plot_verification(rec_ndfd, n_lats, n_lons, rec_rtma, r_lats, r_lons, f"{today_str} 09:00", "ndfd")
-                else:
-                    print("09Z valid time not found in NDFD verif file.")
+                    ndfd_verified = True
                 
                 ds_ndfd_t.close()
                 ds_ndfd_rh.close()
             except Exception as e:
-                print(f"NDFD Verification Failed: {e}")
+                print(f"NOMADS NDFD Verification Extraction Failed: {e}")
+
+        # Method 2: Fallback to Operational TGFTP if NOMADS failed
+        if not ndfd_verified:
+            print("Falling back to TGFTP for NDFD verification...")
+            t_file = download_file("https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus/VP.001-003/ds.temp.bin", "verif_ndfd_t.grib2")
+            rh_file = download_file("https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus/VP.001-003/ds.rhm.bin", "verif_ndfd_rh.grib2")
+            
+            if t_file and rh_file:
+                try:
+                    ds_ndfd_t = xr.open_dataset(t_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': '2t'}})
+                    ds_ndfd_rh = xr.open_dataset(rh_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': '2r'}})
+                    
+                    n_ysl, n_xsl = get_domain_slice(ds_ndfd_t, PLOT_EXTENT)
+                    ds_t_sub = ds_ndfd_t.isel(y=n_ysl, x=n_xsl)
+                    ds_rh_sub = ds_ndfd_rh.isel(y=n_ysl, x=n_xsl)
+
+                    n_lats = ds_t_sub.latitude.values
+                    n_lons = ds_t_sub.longitude.values
+                    n_lons = np.where(n_lons > 180, n_lons - 360, n_lons)
+                    n_moe, n_mask = prepare_fuel_grid(FUEL_PATH, n_lats, n_lons)
+
+                    valid_times_t = np.atleast_1d(ds_t_sub.valid_time.values)
+                    valid_times_rh = np.atleast_1d(ds_rh_sub.valid_time.values)
+
+                    if target_valid_time in valid_times_t and target_valid_time in valid_times_rh:
+                        t_idx = np.where(valid_times_t == target_valid_time)[0][0]
+                        rh_idx = np.where(valid_times_rh == target_valid_time)[0][0]
+                        
+                        t_step = ds_t_sub.isel(step=t_idx)
+                        rh_step = ds_rh_sub.isel(step=rh_idx)
+                        
+                        t_data = t_step['t2m'].values if 't2m' in t_step.data_vars else t_step['2t'].values
+                        rh_data = rh_step['r2'].values if 'r2' in rh_step.data_vars else rh_step['2r'].values
+                        
+                        rec_ndfd = generate_recovery_map_from_rh(t_data, rh_data, n_moe, n_mask)
+                        plot_verification(rec_ndfd, n_lats, n_lons, rec_rtma, r_lats, r_lons, f"{today_str} 09:00", "ndfd")
+                    
+                    ds_ndfd_t.close()
+                    ds_ndfd_rh.close()
+                except Exception as e:
+                    print(f"TGFTP NDFD Verification Extraction Failed: {e}")
 
     except Exception as e:
         print(f"Verification Engine Failed: {e}")
@@ -283,6 +332,8 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
         if os.path.exists("verif_href.grib2"): os.remove("verif_href.grib2")
         if os.path.exists("verif_rtma.grib2"): os.remove("verif_rtma.grib2")
         if os.path.exists("verif_ndfd.grib2"): os.remove("verif_ndfd.grib2")
+        if os.path.exists("verif_ndfd_t.grib2"): os.remove("verif_ndfd_t.grib2")
+        if os.path.exists("verif_ndfd_rh.grib2"): os.remove("verif_ndfd_rh.grib2")
 
 def preserve_verification():
     for model in ["href", "ndfd"]:
