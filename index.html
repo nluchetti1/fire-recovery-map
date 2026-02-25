@@ -177,14 +177,15 @@
     </div>
 
     <div class="verification-container" id="verif-section">
-        <h2>Daily Model Verification</h2>
-        <p>Comparison of Forecasted Recovery (HREF) vs. Observed Recovery (Derived from RTMA).</p>
+        <h2 id="verif-title">HREF Daily Model Verification</h2>
+        <p>Comparison of Forecasted Recovery vs. Observed Recovery (Derived from RTMA).</p>
         <p style="font-size: 0.9em; color: #666;">Valid at 0900 UTC (Approx 4:00 AM Local)</p>
         
         <img class="verification-img" 
-             src="images/verification_09z.png" 
-             alt="Verification Map - Pending Generation"
-             onerror="this.parentElement.style.display='none'"> 
+             id="verif-img"
+             src="images/verification_href_09z.png" 
+             alt="Verification Map"
+             onerror="handleVerifError(this)"> 
     </div>
 
 <script>
@@ -197,6 +198,11 @@
     let boxes = [];
     let currentModel = "href";
 
+    // Elegantly hide verification section if the current model's image doesn't exist yet
+    function handleVerifError(imgElement) {
+        document.getElementById('verif-section').style.display = 'none';
+    }
+
     // --- HANDLE DROPDOWN CHANGE ---
     function updateModel() {
         currentModel = document.getElementById('model-select').value;
@@ -206,6 +212,17 @@
             activeFhr = parseInt(activeBox.id.split('-')[1]);
         }
         setImage(activeFhr);
+        
+        // Update Verification Image and Title dynamically
+        const verifImg = document.getElementById('verif-img');
+        const verifTitle = document.getElementById('verif-title');
+        const verifSection = document.getElementById('verif-section');
+        
+        if (verifImg && verifSection) {
+            verifSection.style.display = 'block'; // Reset visibility when swapping
+            verifImg.src = `${imageDir}verification_${currentModel}_09z.png`;
+            verifTitle.innerText = `${currentModel.toUpperCase()} Daily Model Verification`;
+        }
     }
 
     // --- SWITCH IMAGE ---
@@ -244,7 +261,6 @@
     // --- KEYBOARD NAV ---
     document.addEventListener('keydown', (e) => {
         let currentSrc = imgElement.src;
-        // Adjusted match logic since both filenames end in recovery_fXX.png
         let match = currentSrc.match(/recovery_f(\d+)\.png/);
         if (!match) return;
         
