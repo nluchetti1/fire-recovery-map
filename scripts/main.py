@@ -67,7 +67,6 @@ def calculate_emc(T_degF, RH_percent):
 
 def prepare_fuel_grid(fuel_path, lats, lons):
     """Loads and resamples the fuel grid to match weather coordinates."""
-    # print("Sampling Fuel Map...") 
     with rasterio.open(fuel_path) as src:
         flat_lons = lons.ravel()
         flat_lats = lats.ravel()
@@ -101,6 +100,13 @@ def download_file(url, local_filename):
 
 def generate_recovery_map(t_k, d_k, moe_grid, valid_mask):
     rh = calculate_rh(t_k, d_k)
+    t_f = (t_k - 273.15) * 9/5 + 32
+    fm = calculate_emc(t_f, rh)
+    recovery = (fm / moe_grid) * 100
+    return np.where(valid_mask, recovery, np.nan)
+
+def generate_recovery_map_from_rh(t_k, rh, moe_grid, valid_mask):
+    """New function: NDFD provides RH directly, skipping dewpoint derivation."""
     t_f = (t_k - 273.15) * 9/5 + 32
     fm = calculate_emc(t_f, rh)
     recovery = (fm / moe_grid) * 100
@@ -144,8 +150,8 @@ def plot_verification(f_rec, f_lats, f_lons, o_rec, o_lats, o_lons, valid_time):
     plt.close()
     print("Saved Verification Plot")
 
-def generate_main_plot(recovery_grid, lats, lons, valid_time, fhr, run_str):
-    """Standard single-panel plot for the forecast loop."""
+def generate_main_plot(recovery_grid, lats, lons, valid_time, fhr, run_str, model="HREF"):
+    """Standard single-panel plot for the forecast loop, updated to support dynamic model naming."""
     fig = plt.figure(figsize=(10, 8))
     ax = plt.axes(projection=ccrs.LambertConformal(central_longitude=-80, central_latitude=34))
     ax.set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
@@ -167,31 +173,24 @@ def generate_main_plot(recovery_grid, lats, lons, valid_time, fhr, run_str):
 
     t_str = str(valid_time).split('T')[1][:5]
     d_str = str(valid_time).split('T')[0]
-    plt.title(f"Nighttime Fuel Recovery\nValid: {d_str} {t_str}Z (F{fhr:02d})", loc='left', fontsize=12, fontweight='bold')
+    plt.title(f"{model} Nighttime Fuel Recovery\nValid: {d_str} {t_str}Z (F{fhr:02d})", loc='left', fontsize=12, fontweight='bold')
     plt.title(f"Run: {run_str}", loc='right', fontsize=10)
     cbar = plt.colorbar(mesh, orientation='horizontal', pad=0.05, aspect=35, shrink=0.8)
     cbar.set_ticks([25, 60, 82.5, 147.5])
     cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'])
 
-    filename = f"recovery_f{fhr:02d}.png"
+    filename = f"{model.lower()}_recovery_f{fhr:02d}.png"
     save_path = os.path.join(IMAGE_DIR, filename)
     plt.savefig(save_path, bbox_inches='tight', dpi=100)
     plt.close()
     print(f"Saved {filename}")
 
 def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
-    """
-    Runs the verification.
-    Arguments:
-      - moe_grid/valid_mask: Pre-calculated fuel mask for HREF grid
-      - h_lats/h_lons: Coordinates for HREF grid
-      - y_sl, x_sl: Slice indices to crop the grids efficiently
-    """
+    # (Unchanged Verification logic)
     print("--- Starting Verification ---")
     today = datetime.utcnow().date()
     today_str = today.strftime("%Y%m%d")
     
-    # Target: 09Z this morning
     fhr = 9
     
     href_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/href/prod/href.{today_str}/ensprod/href.t00z.conus.mean.f{fhr:02d}.grib2"
@@ -205,36 +204,28 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
         return
 
     try:
-        # --- PROCESS HREF (Forecast) ---
         ds_href = xr.open_dataset(href_file, engine='cfgrib', 
                                   filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2})
         
-        # SLICE using the indices passed from Main Loop (Robust)
         ds_href_sub = ds_href.isel(y=y_sl, x=x_sl)
         rec_href = generate_recovery_map(ds_href_sub['t2m'].values, ds_href_sub['d2m'].values, moe_grid, valid_mask)
         
-        # --- PROCESS RTMA (Observed) ---
         ds_rtma = xr.open_dataset(rtma_file, engine='cfgrib')
         
-        # RTMA has a DIFFERENT grid. We must compute a new slice and fuel mask.
         r_ysl, r_xsl = get_domain_slice(ds_rtma, PLOT_EXTENT)
         ds_rtma_sub = ds_rtma.isel(y=r_ysl, x=r_xsl)
         
-        # Get RTMA Coordinates
         r_lats = ds_rtma_sub.latitude.values
         r_lons = ds_rtma_sub.longitude.values
         r_lons = np.where(r_lons > 180, r_lons - 360, r_lons)
         
-        # Generate Fuel Mask specifically for RTMA points
         r_moe, r_mask = prepare_fuel_grid(FUEL_PATH, r_lats, r_lons)
         
-        # Note: RTMA variable names can vary. Usually 't2m'/'d2m' or '2t'/'2d'.
         t_var = 't2m' if 't2m' in ds_rtma_sub else '2t'
         d_var = 'd2m' if 'd2m' in ds_rtma_sub else '2d'
         
         rec_rtma = generate_recovery_map(ds_rtma_sub[t_var].values, ds_rtma_sub[d_var].values, r_moe, r_mask)
         
-        # Plot with separate coordinates
         plot_verification(rec_href, h_lats, h_lons, rec_rtma, r_lats, r_lons, f"{today_str} 09:00")
         
         ds_href.close()
@@ -249,7 +240,6 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
         if os.path.exists("verif_rtma.grib2"): os.remove("verif_rtma.grib2")
 
 def preserve_verification():
-    """Downloads the existing verification image so it isn't deleted during early runs."""
     url = "https://nluchetti1.github.io/fire-recovery-map/images/verification_09z.png"
     save_path = os.path.join(IMAGE_DIR, "verification_09z.png")
     
@@ -275,12 +265,12 @@ def main():
     date_str = now.strftime("%Y%m%d")
     run_info = f"{date_str} {run_cycle}Z"
     
-    # Store these to pass to verification later
     global_lats, global_lons = None, None
     global_moe, global_mask = None, None
-    y_slice, x_slice = None, None # Keep indices for slicing verification HREF
+    y_slice, x_slice = None, None 
 
-    # --- 48 HOUR FORECAST LOOP ---
+    # --- 1. HREF 48 HOUR FORECAST LOOP ---
+    print("--- Processing HREF ---")
     for fhr in range(1, 49):
         base_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/href/prod/href.{date_str}/ensprod"
         filename = f"href.t{run_cycle}z.conus.mean.f{fhr:02d}.grib2"
@@ -307,7 +297,8 @@ def main():
 
             recovery = generate_recovery_map(ds_sub['t2m'].values, ds_sub['d2m'].values, global_moe, global_mask)
             
-            generate_main_plot(recovery, global_lats, global_lons, ds_sub.valid_time.values, fhr, run_info)
+            # Use specific model kwarg
+            generate_main_plot(recovery, global_lats, global_lons, ds_sub.valid_time.values, fhr, run_info, model="HREF")
             ds.close()
 
         except Exception as e:
@@ -315,11 +306,58 @@ def main():
         finally:
             if os.path.exists(filename): os.remove(filename)
 
+    # --- 2. NDFD FORECAST LOOP ---
+    print("--- Processing NDFD ---")
+    # NDFD CONUS grids on NOMADS usually compile 1-72 forecast hours into a single grib2 file
+    ndfd_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/ndfd/prod/ndfd.{date_str}/ndfd.t{run_cycle}z.awp2p5.tm00.grib2"
+    ndfd_filename = f"ndfd_t{run_cycle}z.grib2"
+    ndfd_grib = download_file(ndfd_url, ndfd_filename)
+
+    if ndfd_grib:
+        try:
+            # Note: cfgrib can be sensitive to variables with different dimension structures. 
+            # We filter for 2m level for safety to pull Temperature ('2t'/'t2m') and RH ('2r'/'r2'/'rh2m').
+            ds_ndfd = xr.open_dataset(ndfd_grib, engine='cfgrib', 
+                                      filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2, 'stepType': 'instant'})
+            
+            t_var = 't2m' if 't2m' in ds_ndfd else '2t' if '2t' in ds_ndfd else None
+            r_var = 'r2' if 'r2' in ds_ndfd else '2r' if '2r' in ds_ndfd else 'rh2m' if 'rh2m' in ds_ndfd else None
+
+            if t_var and r_var:
+                n_ysl, n_xsl = get_domain_slice(ds_ndfd, PLOT_EXTENT)
+                ds_sub_ndfd = ds_ndfd.isel(y=n_ysl, x=n_xsl)
+                
+                n_lats = ds_sub_ndfd.latitude.values
+                n_lons = ds_sub_ndfd.longitude.values
+                n_lons = np.where(n_lons > 180, n_lons - 360, n_lons)
+                
+                n_moe, n_mask = prepare_fuel_grid(FUEL_PATH, n_lats, n_lons)
+
+                if 'step' in ds_sub_ndfd.dims:
+                    # Iterate through the forecast hours packaged inside the single NDFD grib file
+                    for step_idx in range(len(ds_sub_ndfd.step)):
+                        step_val = ds_sub_ndfd.step[step_idx].values
+                        # convert timedelta object to integer hours
+                        fhr = int(step_val / np.timedelta64(1, 'h'))
+                        
+                        if 1 <= fhr <= 48:
+                            t_data = ds_sub_ndfd[t_var].isel(step=step_idx).values
+                            rh_data = ds_sub_ndfd[r_var].isel(step=step_idx).values
+                            valid_time = ds_sub_ndfd.valid_time.isel(step=step_idx).values
+                            
+                            recovery = generate_recovery_map_from_rh(t_data, rh_data, n_moe, n_mask)
+                            generate_main_plot(recovery, n_lats, n_lons, valid_time, fhr, run_info, model="NDFD")
+            else:
+                print("Skipping NDFD - Standard Temp/RH variables were not found in the dataset.")
+            
+            ds_ndfd.close()
+        except Exception as e:
+            print(f"Error processing NDFD: {e}")
+        finally:
+            if os.path.exists(ndfd_filename): os.remove(ndfd_filename)
+
+
     # --- INTELLIGENT VERIFICATION LOGIC ---
-    # We only run verification if it's past 13:00 UTC (1 PM UTC).
-    # This ensures the 09Z RTMA data is actually available.
-    # If it's earlier (e.g. the 03:30Z run), we just keep the old image.
-    
     if now.hour >= 13:
         if global_lats is not None:
             run_verification_logic(global_moe, global_mask, global_lats, global_lons, y_slice, x_slice)
