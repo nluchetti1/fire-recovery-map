@@ -180,14 +180,14 @@
     </div>
 
     <div class="verification-container" id="verif-section">
-        <h2 id="verif-title">HREF Daily Model Verification</h2>
-        <p>Comparison of Forecasted Recovery vs. Observed Recovery (Derived from RTMA).</p>
+        <h2>HREF Daily Model Verification</h2>
+        <p>Comparison of Forecasted Recovery (HREF) vs. Observed Recovery (Derived from RTMA).</p>
         <p style="font-size: 0.9em; color: #666;">Valid at 0900 UTC (Approx 4:00 AM Local)</p>
         
         <img class="verification-img" 
-             id="verif-img"
-             src="images/verification_href_09z.png" 
-             alt="Verification Map"> 
+             src="images/verification_09z.png" 
+             alt="HREF Verification Map"
+             onerror="this.parentElement.style.display='none'"> 
     </div>
 
 <script>
@@ -209,15 +209,6 @@
             activeFhr = parseInt(activeBox.id.split('-')[1]);
         }
         setImage(activeFhr);
-        
-        // Update Verification Image and Title dynamically
-        const verifImg = document.getElementById('verif-img');
-        const verifTitle = document.getElementById('verif-title');
-        
-        if (verifImg) {
-            verifImg.src = `${imageDir}verification_${currentModel}_09z.png`;
-            verifTitle.innerText = `${currentModel.toUpperCase()} Daily Model Verification`;
-        }
     }
 
     // --- SWITCH IMAGE ---
