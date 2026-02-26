@@ -160,8 +160,8 @@
     <div class="controls-header">
         <div class="left-controls">
             <select id="model-select" onchange="updateModel()">
-                <option value="href">HREF Ensemble</option>
                 <option value="ndfd">NWS NDFD</option>
+                <option value="href">HREF Ensemble</option>
             </select>
             <div>
                 <strong>Hover/Click</strong> to view | <strong>Arrows</strong> to navigate
@@ -198,7 +198,7 @@
     const loader = document.getElementById('loader');
     const btn = document.getElementById('download-btn');
     let boxes = [];
-    let currentModel = "href";
+    let currentModel = "ndfd";
 
     // --- HANDLE DROPDOWN CHANGE ---
     function updateModel() {
