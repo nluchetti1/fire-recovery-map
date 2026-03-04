@@ -2,9 +2,7 @@ requests
 xarray
 rasterio
 numpy
-pandas
 matplotlib
-scipy
 cfgrib
 eccodes
 cartopy
