@@ -32,7 +32,6 @@ MOE_LOOKUP = {
 }
 
 def get_domain_slice(ds, extent):
-    """Finds x/y indices for the extent."""
     lats = ds.latitude.values
     lons = ds.longitude.values
     lons = np.where(lons > 180, lons - 360, lons)
@@ -71,7 +70,6 @@ def calculate_emc(T_degF, RH_percent):
     return np.clip(emc, 0, 35)
 
 def prepare_fuel_grid(fuel_path, lats, lons):
-    """Loads and resamples the fuel grid to match weather coordinates."""
     with rasterio.open(fuel_path) as src:
         flat_lons = lons.ravel()
         flat_lats = lats.ravel()
@@ -128,14 +126,12 @@ def plot_verification(f_rec, f_lats, f_lons, o_rec, o_lats, o_lons, valid_time, 
     cmap = mcolors.ListedColormap(colors)
     norm = mcolors.BoundaryNorm(levels, len(colors))
     
-    # 1. Forecast Plot
     ax[0].set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
     ax[0].add_feature(cfeature.STATES, linewidth=1.5)
     ax[0].add_feature(USCOUNTIES.with_scale('5m'), linewidth=0.5, alpha=0.5)
     ax[0].set_title(f"HREF Forecast ({hour_str})\nValid: {valid_time} UTC", fontweight='bold')
     mesh = ax[0].pcolormesh(f_lons, f_lats, f_rec, cmap=cmap, norm=norm, transform=ccrs.PlateCarree(), shading='auto')
     
-    # 2. Observed Plot
     ax[1].set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
     ax[1].add_feature(cfeature.STATES, linewidth=1.5)
     ax[1].add_feature(USCOUNTIES.with_scale('5m'), linewidth=0.5, alpha=0.5)
@@ -185,8 +181,7 @@ def generate_main_plot(recovery_grid, lats, lons, valid_time, fhr, run_str, mode
     plt.close()
     print(f"Saved {filename}")
 
-def generate_ntr_plot(recovery_grid, lats, lons, run_str, model="HREF"):
-    """Plots the 3-hour average of the nighttime recovery."""
+def generate_ntr_plot(recovery_grid, lats, lons, valid_time, fhr, run_str, model="HREF"):
     fig = plt.figure(figsize=(10, 8))
     ax = plt.axes(projection=ccrs.LambertConformal(central_longitude=-80, central_latitude=34))
     ax.set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
@@ -206,13 +201,15 @@ def generate_ntr_plot(recovery_grid, lats, lons, run_str, model="HREF"):
     mesh = ax.pcolormesh(lons, lats, plot_data, cmap=cmap, norm=norm, 
                          transform=ccrs.PlateCarree(), shading='auto', zorder=5)
 
-    plt.title(f"{model} 3-Hour Average Nighttime Recovery (F01-F03)", loc='left', fontsize=12, fontweight='bold')
+    t_str = str(valid_time).split('T')[1][:5]
+    d_str = str(valid_time).split('T')[0]
+    plt.title(f"{model} 3-Hour Trailing Avg Recovery\nValid: {d_str} {t_str}Z (F{fhr:02d})", loc='left', fontsize=12, fontweight='bold')
     plt.title(f"Run: {run_str}", loc='right', fontsize=10)
     cbar = plt.colorbar(mesh, orientation='horizontal', pad=0.05, aspect=35, shrink=0.8)
     cbar.set_ticks([25, 60, 82.5, 147.5])
     cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'])
 
-    filename = f"ntr_{model.lower()}.png"
+    filename = f"ntr_{model.lower()}_f{fhr:02d}.png"
     save_path = os.path.join(IMAGE_DIR, filename)
     plt.savefig(save_path, bbox_inches='tight', dpi=100)
     plt.close()
@@ -236,7 +233,6 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
         rtma_file = download_file(rtma_url, f"verif_rtma_{hour_str}.grib2")
         
         if not href_file or not rtma_file:
-            print(f"Skipping verification for {hour_str} (Files not available)")
             continue
 
         try:
@@ -261,7 +257,6 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
             plot_verification(rec_href, h_lats, h_lons, rec_rtma, r_lats, r_lons, f"{today_str} {hour_str[:2]}:00", save_name, hour_str)
             verif_files.append(os.path.join(IMAGE_DIR, save_name))
             
-            # Preserve 09z explicitly for the main website display
             if v_hour == 9:
                 shutil.copy(os.path.join(IMAGE_DIR, save_name), os.path.join(IMAGE_DIR, "verification_09z.png"))
             
@@ -274,16 +269,14 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
             if os.path.exists(href_file): os.remove(href_file)
             if os.path.exists(rtma_file): os.remove(rtma_file)
 
-    # Zip up the suite
     zip_path = os.path.join(IMAGE_DIR, 'verification_suite.zip')
     try:
         with zipfile.ZipFile(zip_path, 'w') as zipf:
             for file in verif_files:
                 if os.path.exists(file):
                     zipf.write(file, os.path.basename(file))
-        print("Successfully bundled verification suite into ZIP.")
     except Exception as e:
-        print(f"Failed to create ZIP archive: {e}")
+        pass
 
 def preserve_verification():
     url = "https://nluchetti1.github.io/fire-recovery-map/images/verification_09z.png"
@@ -293,7 +286,6 @@ def preserve_verification():
         if r.status_code == 200:
             with open(save_path, 'wb') as f:
                 f.write(r.content)
-            print("Success: Existing verification image preserved.")
     except Exception:
         pass
 
@@ -309,8 +301,9 @@ def main():
     global_moe, global_mask = None, None
     y_slice, x_slice = None, None 
     
-    href_ntr_grids = []
-    ndfd_ntr_grids = []
+    # Track the trailing 3 hours for NTR averages
+    href_trailing = []
+    ndfd_trailing = []
 
     # --- 1. HREF 48 HOUR FORECAST LOOP ---
     print("--- Processing HREF ---")
@@ -333,16 +326,22 @@ def main():
                 global_lats = ds_sub.latitude.values
                 lons_raw = ds_sub.longitude.values
                 global_lons = np.where(lons_raw > 180, lons_raw - 360, lons_raw)
-                
                 global_moe, global_mask = prepare_fuel_grid(FUEL_PATH, global_lats, global_lons)
             else:
                 ds_sub = ds.isel(y=y_slice, x=x_slice)
 
             recovery = generate_recovery_map(ds_sub['t2m'].values, ds_sub['d2m'].values, global_moe, global_mask)
+            
+            # Plot standard hour map
             generate_main_plot(recovery, global_lats, global_lons, ds_sub.valid_time.values, fhr, run_info, model="HREF")
             
-            if 1 <= fhr <= 3:
-                href_ntr_grids.append(recovery)
+            # Trailing 3-Hour Average Logic
+            href_trailing.append(recovery)
+            if len(href_trailing) > 3:
+                href_trailing.pop(0) # Keep only the last 3 hours
+            
+            avg_recovery = np.nanmean(href_trailing, axis=0)
+            generate_ntr_plot(avg_recovery, global_lats, global_lons, ds_sub.valid_time.values, fhr, run_info, model="HREF")
                 
             ds.close()
 
@@ -371,7 +370,6 @@ def main():
             n_lats = ds_t_sub.latitude.values
             n_lons = ds_t_sub.longitude.values
             n_lons = np.where(n_lons > 180, n_lons - 360, n_lons)
-            
             n_moe, n_mask = prepare_fuel_grid(FUEL_PATH, n_lats, n_lons)
 
             try:
@@ -400,10 +398,17 @@ def main():
                 rh_data = rh_step['r2'].values if 'r2' in rh_step.data_vars else rh_step['2r'].values
                 
                 recovery = generate_recovery_map_from_rh(t_data, rh_data, n_moe, n_mask)
+                
+                # Plot standard hour map
                 generate_main_plot(recovery, n_lats, n_lons, v_time, fhr, ndfd_run_info, model="NDFD")
                 
-                if 1 <= fhr <= 3:
-                    ndfd_ntr_grids.append(recovery)
+                # Trailing 3-Hour Average Logic
+                ndfd_trailing.append(recovery)
+                if len(ndfd_trailing) > 3:
+                    ndfd_trailing.pop(0)
+                
+                avg_recovery = np.nanmean(ndfd_trailing, axis=0)
+                generate_ntr_plot(avg_recovery, n_lats, n_lons, v_time, fhr, ndfd_run_info, model="NDFD")
                     
                 fhr += 1
                 
@@ -415,21 +420,6 @@ def main():
             if os.path.exists(temp_file): os.remove(temp_file)
             if os.path.exists(rh_file): os.remove(rh_file)
 
-    # --- 3. GENERATE 3-HOUR NTR AVERAGES ---
-    print("\n--- Generating 3-Hour NTR Averages ---")
-    if len(href_ntr_grids) > 0:
-        href_avg = np.nanmean(href_ntr_grids, axis=0)
-        generate_ntr_plot(href_avg, global_lats, global_lons, run_info, model="HREF")
-    
-    if len(ndfd_ntr_grids) > 0:
-        ndfd_avg = np.nanmean(ndfd_ntr_grids, axis=0)
-        # Assuming NDFD uses the same grid as global for this plot. If not, pass n_lats/n_lons
-        try:
-            generate_ntr_plot(ndfd_avg, n_lats, n_lons, ndfd_run_info, model="NDFD")
-        except NameError:
-            print("Could not generate NDFD average (grid not found).")
-
-    # --- 4. INTELLIGENT VERIFICATION LOGIC ---
     if now.hour >= 13:
         if global_lats is not None:
             run_verification_logic(global_moe, global_mask, global_lats, global_lons, y_slice, x_slice)
