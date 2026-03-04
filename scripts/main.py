@@ -1,20 +1,20 @@
 import warnings
 warnings.filterwarnings("ignore")
 
+import os
+import shutil
+import requests
+import zipfile
+from datetime import datetime, timedelta, timezone
+
+import numpy as np
+import xarray as xr
+import rasterio
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-import numpy as np
-import os, json, shutil, requests, glob
-import imageio.v2 as imageio
-from scipy.interpolate import griddata
-from datetime import datetime, timedelta, timezone
-import matplotlib.colors as mcolors
-import xarray as xr
-import pandas as pd
-import rasterio
 from metpy.plots import USCOUNTIES
-import zipfile
 
 # --- CONFIGURATION ---
 FUEL_PATH = 'data/fuel_SE_fbfm40.tif' 
