@@ -28,15 +28,18 @@
             align-items: center;
             margin-bottom: 10px;
             font-size: 14px;
+            flex-wrap: wrap;
+            gap: 10px;
         }
         
         .left-controls {
             display: flex;
             align-items: center;
             gap: 15px;
+            flex-wrap: wrap;
         }
         
-        #model-select {
+        select {
             padding: 5px 10px;
             border-radius: 4px;
             border: 1px solid #ced4da;
@@ -58,6 +61,18 @@
         }
         .btn-green:hover { background-color: #218838; }
         .btn-green:disabled { background-color: #ccc; cursor: default; }
+        
+        .btn-blue {
+            background-color: #0056b3;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 13px;
+        }
+        .btn-blue:hover { background-color: #004494; }
 
         /* GRID LAYOUT FOR BUTTONS */
         .timeline-grid {
@@ -143,12 +158,17 @@
             box-sizing: border-box;
             text-align: center;
             margin-bottom: 50px;
+            position: relative;
         }
 
         .verification-img {
             width: 100%;
             height: auto;
             border: 1px solid #eee;
+            margin-top: 15px;
+        }
+        
+        .verif-btn-wrapper {
             margin-top: 15px;
         }
     </style>
@@ -160,10 +180,18 @@
     <div class="controls-header">
         <div class="left-controls">
             <select id="model-select" onchange="updateModel()">
-                <option value="ndfd">NWS NDFD</option>
-                <option value="href">HREF Ensemble</option>
+                <option value="" disabled>--- Hourly Forecasts ---</option>
+                <option value="ndfd" selected>NWS NDFD (Hourly)</option>
+                <option value="href">HREF Ensemble (Hourly)</option>
             </select>
-            <div>
+            
+            <select id="ntr-select" onchange="setNTRMode()" style="background-color: #fce4ec; color: #880e4f;">
+                <option value="" disabled selected>3-Hour NTR Average</option>
+                <option value="ndfd">NDFD 3-Hour Average</option>
+                <option value="href">HREF 3-Hour Average</option>
+            </select>
+
+            <div id="nav-hints">
                 <strong>Hover/Click</strong> to view | <strong>Arrows</strong> to navigate
             </div>
         </div>
@@ -188,6 +216,10 @@
              src="images/verification_09z.png" 
              alt="HREF Verification Map"
              onerror="this.parentElement.style.display='none'"> 
+             
+        <div class="verif-btn-wrapper">
+            <button class="btn-blue" onclick="downloadVerifSuite()">Download Full 01Z-12Z Verification Suite</button>
+        </div>
     </div>
 
 <script>
@@ -197,11 +229,18 @@
     const imgElement = document.getElementById('forecast-img');
     const loader = document.getElementById('loader');
     const btn = document.getElementById('download-btn');
+    const hints = document.getElementById('nav-hints');
     let boxes = [];
     let currentModel = "ndfd";
+    let isNTRMode = false;
 
-    // --- HANDLE DROPDOWN CHANGE ---
     function updateModel() {
+        document.getElementById('ntr-select').selectedIndex = 0; // Reset NTR dropdown
+        isNTRMode = false;
+        timeline.style.display = 'grid';
+        hints.style.display = 'block';
+        btn.style.display = 'inline-block';
+        
         currentModel = document.getElementById('model-select').value;
         let activeFhr = 1;
         const activeBox = document.querySelector('.time-box.active');
@@ -211,8 +250,26 @@
         setImage(activeFhr);
     }
 
-    // --- SWITCH IMAGE ---
+    function setNTRMode() {
+        let ntrModel = document.getElementById('ntr-select').value;
+        if(ntrModel) {
+            isNTRMode = true;
+            timeline.style.display = 'none'; // Hide loop navigation
+            hints.style.display = 'none';
+            btn.style.display = 'none'; // Hide GIF button for static images
+            
+            loader.style.display = 'flex';
+            imgElement.style.display = 'block';
+            imgElement.src = imageDir + `ntr_${ntrModel}.png?v=${Date.now()}`;
+        }
+    }
+
+    function downloadVerifSuite() {
+        window.open('images/verification_suite.zip', '_blank');
+    }
+
     function setImage(fhr) {
+        if (isNTRMode) return;
         const fhrStr = String(fhr).padStart(2, '0');
         const filename = `${currentModel}_recovery_f${fhrStr}.png`;
         
@@ -246,6 +303,7 @@
 
     // --- KEYBOARD NAV ---
     document.addEventListener('keydown', (e) => {
+        if (isNTRMode) return;
         let currentSrc = imgElement.src;
         let match = currentSrc.match(/recovery_f(\d+)\.png/);
         if (!match) return;
