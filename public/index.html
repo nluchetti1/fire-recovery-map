@@ -186,7 +186,7 @@
             </select>
             
             <select id="ntr-select" onchange="setNTRMode()" style="background-color: #fce4ec; color: #880e4f;">
-                <option value="" disabled selected>3-Hour NTR Average</option>
+                <option value="" disabled selected>--- 3-Hour Trailing Averages ---</option>
                 <option value="ndfd">NDFD 3-Hour Average</option>
                 <option value="href">HREF 3-Hour Average</option>
             </select>
@@ -235,11 +235,8 @@
     let isNTRMode = false;
 
     function updateModel() {
-        document.getElementById('ntr-select').selectedIndex = 0; // Reset NTR dropdown
+        document.getElementById('ntr-select').selectedIndex = 0; 
         isNTRMode = false;
-        timeline.style.display = 'grid';
-        hints.style.display = 'block';
-        btn.style.display = 'inline-block';
         
         currentModel = document.getElementById('model-select').value;
         let activeFhr = 1;
@@ -254,13 +251,15 @@
         let ntrModel = document.getElementById('ntr-select').value;
         if(ntrModel) {
             isNTRMode = true;
-            timeline.style.display = 'none'; // Hide loop navigation
-            hints.style.display = 'none';
-            btn.style.display = 'none'; // Hide GIF button for static images
+            currentModel = ntrModel;
+            document.getElementById('model-select').selectedIndex = 0; 
             
-            loader.style.display = 'flex';
-            imgElement.style.display = 'block';
-            imgElement.src = imageDir + `ntr_${ntrModel}.png?v=${Date.now()}`;
+            let activeFhr = 1;
+            const activeBox = document.querySelector('.time-box.active');
+            if (activeBox) {
+                activeFhr = parseInt(activeBox.id.split('-')[1]);
+            }
+            setImage(activeFhr);
         }
     }
 
@@ -269,9 +268,15 @@
     }
 
     function setImage(fhr) {
-        if (isNTRMode) return;
         const fhrStr = String(fhr).padStart(2, '0');
-        const filename = `${currentModel}_recovery_f${fhrStr}.png`;
+        let filename = '';
+        
+        // Use the correct prefix based on whether the user wants hourly or the 3-hour averages
+        if (isNTRMode) {
+            filename = `ntr_${currentModel}_f${fhrStr}.png`;
+        } else {
+            filename = `${currentModel}_recovery_f${fhrStr}.png`;
+        }
         
         loader.style.display = 'flex';
         imgElement.style.display = 'block';
@@ -285,7 +290,6 @@
     imgElement.onload = function() { loader.style.display = 'none'; };
     imgElement.onerror = function() { loader.style.display = 'none'; };
 
-    // --- BUILD GRID ---
     for (let i = 1; i <= totalHours; i++) {
         let box = document.createElement('div');
         box.className = 'time-box';
@@ -301,11 +305,9 @@
 
     setImage(1);
 
-    // --- KEYBOARD NAV ---
     document.addEventListener('keydown', (e) => {
-        if (isNTRMode) return;
         let currentSrc = imgElement.src;
-        let match = currentSrc.match(/recovery_f(\d+)\.png/);
+        let match = currentSrc.match(/f(\d+)\.png/); // Broadened regex to catch both file formats
         if (!match) return;
         
         let currentFhr = parseInt(match[1]);
@@ -319,7 +321,6 @@
         }
     });
 
-    // --- GIF GENERATOR ---
     async function generateGIF() {
         btn.disabled = true;
         btn.textContent = "Loading...";
@@ -339,7 +340,14 @@
 
             for (let i = 1; i <= totalHours; i++) {
                 const fhrStr = String(i).padStart(2, '0');
-                const filename = `${currentModel}_recovery_f${fhrStr}.png`;
+                
+                let filename = '';
+                if (isNTRMode) {
+                    filename = `ntr_${currentModel}_f${fhrStr}.png`;
+                } else {
+                    filename = `${currentModel}_recovery_f${fhrStr}.png`;
+                }
+                
                 const url = imageDir + filename;
                 
                 const percent = Math.round((i / totalHours) * 100);
@@ -358,7 +366,7 @@
             gif.on('finished', function(blob) {
                 const link = document.createElement('a');
                 link.href = URL.createObjectURL(blob);
-                link.download = `${currentModel}_fire_recovery_loop.gif`;
+                link.download = `${currentModel}_${isNTRMode ? 'ntr' : 'recovery'}_loop.gif`;
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
