@@ -279,13 +279,25 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
         pass
 
 def preserve_verification():
-    url = "https://nluchetti1.github.io/fire-recovery-map/images/verification_09z.png"
+    # Preserve the 09z image
+    img_url = "https://nluchetti1.github.io/fire-recovery-map/images/verification_09z.png"
     save_path = os.path.join(IMAGE_DIR, "verification_09z.png")
     try:
-        r = requests.get(url)
+        r = requests.get(img_url)
         if r.status_code == 200:
             with open(save_path, 'wb') as f:
                 f.write(r.content)
+    except Exception:
+        pass
+
+    # Preserve the zip file so the download button doesn't 404
+    zip_url = "https://nluchetti1.github.io/fire-recovery-map/images/verification_suite.zip"
+    zip_save_path = os.path.join(IMAGE_DIR, "verification_suite.zip")
+    try:
+        r_zip = requests.get(zip_url)
+        if r_zip.status_code == 200:
+            with open(zip_save_path, 'wb') as f:
+                f.write(r_zip.content)
     except Exception:
         pass
 
