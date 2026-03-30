@@ -191,6 +191,14 @@
                 <option value="href">HREF 3-Hour Average</option>
             </select>
 
+            <select id="daily-select" onchange="setDailyMode()" style="background-color: #e8f5e9; color: #1b5e20;">
+                <option value="" disabled selected>--- Daily 0600 Local Averages ---</option>
+                <option value="ndfd-4hr">NDFD 4-Hour Daily</option>
+                <option value="ndfd-6hr">NDFD 6-Hour Daily</option>
+                <option value="href-4hr">HREF 4-Hour Daily</option>
+                <option value="href-6hr">HREF 6-Hour Daily</option>
+            </select>
+
             <div id="nav-hints">
                 <strong>Hover/Click</strong> to view | <strong>Arrows</strong> to navigate
             </div>
@@ -230,36 +238,48 @@
     const loader = document.getElementById('loader');
     const btn = document.getElementById('download-btn');
     const hints = document.getElementById('nav-hints');
+    
     let boxes = [];
     let currentModel = "ndfd";
     let isNTRMode = false;
+    let isDailyMode = false;
+    let dailyPeriod = "4hr";
 
     function updateModel() {
         document.getElementById('ntr-select').selectedIndex = 0; 
+        document.getElementById('daily-select').selectedIndex = 0; 
         isNTRMode = false;
+        isDailyMode = false;
         
         currentModel = document.getElementById('model-select').value;
-        let activeFhr = 1;
-        const activeBox = document.querySelector('.time-box.active');
-        if (activeBox) {
-            activeFhr = parseInt(activeBox.id.split('-')[1]);
-        }
-        setImage(activeFhr);
+        buildTimeline();
     }
 
     function setNTRMode() {
         let ntrModel = document.getElementById('ntr-select').value;
         if(ntrModel) {
             isNTRMode = true;
+            isDailyMode = false;
             currentModel = ntrModel;
             document.getElementById('model-select').selectedIndex = 0; 
-            
-            let activeFhr = 1;
-            const activeBox = document.querySelector('.time-box.active');
-            if (activeBox) {
-                activeFhr = parseInt(activeBox.id.split('-')[1]);
-            }
-            setImage(activeFhr);
+            document.getElementById('daily-select').selectedIndex = 0; 
+            buildTimeline();
+        }
+    }
+
+    function setDailyMode() {
+        let dailyModel = document.getElementById('daily-select').value;
+        if(dailyModel) {
+            isDailyMode = true;
+            isNTRMode = false;
+            document.getElementById('model-select').selectedIndex = 0;
+            document.getElementById('ntr-select').selectedIndex = 0;
+
+            let parts = dailyModel.split('-');
+            currentModel = parts[0];
+            dailyPeriod = parts[1];
+
+            buildTimeline();
         }
     }
 
@@ -267,15 +287,45 @@
         window.open('images/verification_suite.zip', '_blank');
     }
 
-    function setImage(fhr) {
-        const fhrStr = String(fhr).padStart(2, '0');
+    function buildTimeline() {
+        timeline.innerHTML = '';
+        boxes = [];
+        
+        // If daily mode is active, we only need a couple of blocks (Day 1 & Day 2)
+        let count = isDailyMode ? 2 : totalHours; 
+
+        for (let i = 1; i <= count; i++) {
+            let box = document.createElement('div');
+            box.className = 'time-box';
+            box.textContent = isDailyMode ? `Day ${i}` : `f${i}`;
+            box.id = `box-${i}`;
+            
+            box.addEventListener('mouseenter', () => setImage(i));
+            box.addEventListener('click', () => setImage(i));
+
+            // To avoid huge empty gaps on the grid, daily buttons can span more columns
+            if (isDailyMode) {
+                box.style.gridColumn = `span 12`;
+            }
+
+            timeline.appendChild(box);
+            boxes.push(box);
+        }
+        
+        let activeFhr = 1;
+        setImage(activeFhr);
+    }
+
+    function setImage(idx) {
+        const idxStr = String(idx).padStart(2, '0');
         let filename = '';
         
-        // Use the correct prefix based on whether the user wants hourly or the 3-hour averages
-        if (isNTRMode) {
-            filename = `ntr_${currentModel}_f${fhrStr}.png`;
+        if (isDailyMode) {
+            filename = `daily_${dailyPeriod}_${currentModel}_day${idx}.png`;
+        } else if (isNTRMode) {
+            filename = `ntr_${currentModel}_f${idxStr}.png`;
         } else {
-            filename = `${currentModel}_recovery_f${fhrStr}.png`;
+            filename = `${currentModel}_recovery_f${idxStr}.png`;
         }
         
         loader.style.display = 'flex';
@@ -283,40 +333,28 @@
         imgElement.src = imageDir + filename;
 
         boxes.forEach(b => b.classList.remove('active'));
-        const activeBox = document.getElementById(`box-${fhr}`);
+        const activeBox = document.getElementById(`box-${idx}`);
         if(activeBox) activeBox.classList.add('active');
     }
 
     imgElement.onload = function() { loader.style.display = 'none'; };
     imgElement.onerror = function() { loader.style.display = 'none'; };
 
-    for (let i = 1; i <= totalHours; i++) {
-        let box = document.createElement('div');
-        box.className = 'time-box';
-        box.textContent = `f${i}`;
-        box.id = `box-${i}`;
-        
-        box.addEventListener('mouseenter', () => setImage(i));
-        box.addEventListener('click', () => setImage(i));
-
-        timeline.appendChild(box);
-        boxes.push(box);
-    }
-
-    setImage(1);
+    // Initialize map on load
+    buildTimeline();
 
     document.addEventListener('keydown', (e) => {
-        let currentSrc = imgElement.src;
-        let match = currentSrc.match(/f(\d+)\.png/); // Broadened regex to catch both file formats
-        if (!match) return;
+        const activeBox = document.querySelector('.time-box.active');
+        if (!activeBox) return;
         
-        let currentFhr = parseInt(match[1]);
+        let currentIdx = parseInt(activeBox.id.split('-')[1]);
+        let maxIdx = isDailyMode ? 2 : totalHours;
 
         if (e.key === "ArrowRight") {
-            let next = currentFhr + 1;
-            if (next <= totalHours) setImage(next);
+            let next = currentIdx + 1;
+            if (next <= maxIdx) setImage(next);
         } else if (e.key === "ArrowLeft") {
-            let prev = currentFhr - 1;
+            let prev = currentIdx - 1;
             if (prev >= 1) setImage(prev);
         }
     });
@@ -338,25 +376,29 @@
                 height: imgElement.naturalHeight || 800
             });
 
-            for (let i = 1; i <= totalHours; i++) {
-                const fhrStr = String(i).padStart(2, '0');
+            const maxIdx = isDailyMode ? 2 : totalHours;
+
+            for (let i = 1; i <= maxIdx; i++) {
+                const idxStr = String(i).padStart(2, '0');
                 
                 let filename = '';
-                if (isNTRMode) {
-                    filename = `ntr_${currentModel}_f${fhrStr}.png`;
+                if (isDailyMode) {
+                    filename = `daily_${dailyPeriod}_${currentModel}_day${i}.png`;
+                } else if (isNTRMode) {
+                    filename = `ntr_${currentModel}_f${idxStr}.png`;
                 } else {
-                    filename = `${currentModel}_recovery_f${fhrStr}.png`;
+                    filename = `${currentModel}_recovery_f${idxStr}.png`;
                 }
                 
                 const url = imageDir + filename;
                 
-                const percent = Math.round((i / totalHours) * 100);
+                const percent = Math.round((i / maxIdx) * 100);
                 btn.textContent = `Building (${percent}%)...`;
 
                 const img = new Image();
                 img.crossOrigin = "Anonymous";
                 await new Promise((resolve) => {
-                    img.onload = () => { gif.addFrame(img, {delay: 200}); resolve(); };
+                    img.onload = () => { gif.addFrame(img, {delay: 500}); resolve(); }; // Slightly slower delay for clarity
                     img.onerror = () => { resolve(); }; 
                     img.src = url;
                 });
@@ -366,7 +408,7 @@
             gif.on('finished', function(blob) {
                 const link = document.createElement('a');
                 link.href = URL.createObjectURL(blob);
-                link.download = `${currentModel}_${isNTRMode ? 'ntr' : 'recovery'}_loop.gif`;
+                link.download = `${currentModel}_${isDailyMode ? 'daily' : (isNTRMode ? 'ntr' : 'recovery')}_loop.gif`;
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
