@@ -215,6 +215,39 @@ def generate_ntr_plot(recovery_grid, lats, lons, valid_time, fhr, run_str, model
     plt.close()
     print(f"Saved {filename}")
 
+def generate_daily_plot(recovery_grid, lats, lons, valid_time, day_idx, run_str, model="HREF", period="4hr"):
+    fig = plt.figure(figsize=(10, 8))
+    ax = plt.axes(projection=ccrs.LambertConformal(central_longitude=-80, central_latitude=34))
+    ax.set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
+    ax.add_feature(cfeature.STATES, linewidth=1.5, edgecolor='black', zorder=10)
+    try:
+        ax.add_feature(USCOUNTIES.with_scale('5m'), linewidth=0.8, edgecolor='black', zorder=11, alpha=0.6)
+    except: pass
+    ax.add_feature(cfeature.OCEAN, facecolor='#cceeff')
+    ax.add_feature(cfeature.LAND, facecolor='#f0f0f0')
+
+    levels = [0, 50, 70, 95, 200]
+    colors = ['#d32f2f', '#ffa000', '#388e3c', '#1976d2'] 
+    cmap = mcolors.ListedColormap(colors)
+    norm = mcolors.BoundaryNorm(levels, len(colors))
+    plot_data = np.ma.masked_invalid(recovery_grid)
+
+    mesh = ax.pcolormesh(lons, lats, plot_data, cmap=cmap, norm=norm, 
+                         transform=ccrs.PlateCarree(), shading='auto', zorder=5)
+
+    d_str = str(valid_time).split('T')[0]
+    plt.title(f"{model} Daily {period} Avg Recovery (Ending 0600 Local)\nValid: {d_str} (Day {day_idx})", loc='left', fontsize=12, fontweight='bold')
+    plt.title(f"Run: {run_str}", loc='right', fontsize=10)
+    cbar = plt.colorbar(mesh, orientation='horizontal', pad=0.05, aspect=35, shrink=0.8)
+    cbar.set_ticks([25, 60, 82.5, 147.5])
+    cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'])
+
+    filename = f"daily_{period}_{model.lower()}_day{day_idx}.png"
+    save_path = os.path.join(IMAGE_DIR, filename)
+    plt.savefig(save_path, bbox_inches='tight', dpi=100)
+    plt.close()
+    print(f"Saved {filename}")
+
 def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
     print("\n--- Starting Verification Suite (01Z - 12Z) ---")
     today = datetime.utcnow().date()
@@ -279,7 +312,6 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
         pass
 
 def preserve_verification():
-    # Preserve the 09z image
     img_url = "https://nluchetti1.github.io/fire-recovery-map/images/verification_09z.png"
     save_path = os.path.join(IMAGE_DIR, "verification_09z.png")
     try:
@@ -290,7 +322,6 @@ def preserve_verification():
     except Exception:
         pass
 
-    # Preserve the zip file so the download button doesn't 404
     zip_url = "https://nluchetti1.github.io/fire-recovery-map/images/verification_suite.zip"
     zip_save_path = os.path.join(IMAGE_DIR, "verification_suite.zip")
     try:
@@ -313,9 +344,9 @@ def main():
     global_moe, global_mask = None, None
     y_slice, x_slice = None, None 
     
-    # Track the trailing 3 hours for NTR averages
-    href_trailing = []
-    ndfd_trailing = []
+    href_trailing_3 = []
+    href_trailing_6 = [] # Track up to 6 hours for daily mapping
+    day_counter_href = 1
 
     # --- 1. HREF 48 HOUR FORECAST LOOP ---
     print("--- Processing HREF ---")
@@ -348,13 +379,31 @@ def main():
             generate_main_plot(recovery, global_lats, global_lons, ds_sub.valid_time.values, fhr, run_info, model="HREF")
             
             # Trailing 3-Hour Average Logic
-            href_trailing.append(recovery)
-            if len(href_trailing) > 3:
-                href_trailing.pop(0) # Keep only the last 3 hours
+            href_trailing_3.append(recovery)
+            if len(href_trailing_3) > 3:
+                href_trailing_3.pop(0) 
             
-            avg_recovery = np.nanmean(href_trailing, axis=0)
-            generate_ntr_plot(avg_recovery, global_lats, global_lons, ds_sub.valid_time.values, fhr, run_info, model="HREF")
+            avg_recovery_3 = np.nanmean(href_trailing_3, axis=0)
+            generate_ntr_plot(avg_recovery_3, global_lats, global_lons, ds_sub.valid_time.values, fhr, run_info, model="HREF")
                 
+            # Trailing Daily Average Logic (Looking for 1100 UTC / ~0600 Local)
+            href_trailing_6.append(recovery)
+            if len(href_trailing_6) > 6:
+                href_trailing_6.pop(0)
+
+            vt_str = str(ds_sub.valid_time.values)
+            if 'T' in vt_str:
+                vt_hour = int(vt_str.split('T')[1][:2])
+                if vt_hour == 11 and len(href_trailing_6) >= 4:
+                    avg_4hr = np.nanmean(href_trailing_6[-4:], axis=0)
+                    generate_daily_plot(avg_4hr, global_lats, global_lons, ds_sub.valid_time.values, day_counter_href, run_info, model="HREF", period="4hr")
+
+                    if len(href_trailing_6) >= 6:
+                        avg_6hr = np.nanmean(href_trailing_6, axis=0)
+                        generate_daily_plot(avg_6hr, global_lats, global_lons, ds_sub.valid_time.values, day_counter_href, run_info, model="HREF", period="6hr")
+                    
+                    day_counter_href += 1
+
             ds.close()
 
         except Exception as e:
@@ -369,6 +418,10 @@ def main():
     
     temp_file = download_file(ndfd_temp_url, "ndfd_temp.grib2")
     rh_file = download_file(ndfd_rh_url, "ndfd_rh.grib2")
+
+    ndfd_trailing_3 = []
+    ndfd_trailing_6 = [] # Track up to 6 hours for daily mapping
+    day_counter_ndfd = 1
 
     if temp_file and rh_file:
         try:
@@ -415,12 +468,30 @@ def main():
                 generate_main_plot(recovery, n_lats, n_lons, v_time, fhr, ndfd_run_info, model="NDFD")
                 
                 # Trailing 3-Hour Average Logic
-                ndfd_trailing.append(recovery)
-                if len(ndfd_trailing) > 3:
-                    ndfd_trailing.pop(0)
+                ndfd_trailing_3.append(recovery)
+                if len(ndfd_trailing_3) > 3:
+                    ndfd_trailing_3.pop(0)
                 
-                avg_recovery = np.nanmean(ndfd_trailing, axis=0)
-                generate_ntr_plot(avg_recovery, n_lats, n_lons, v_time, fhr, ndfd_run_info, model="NDFD")
+                avg_recovery_3 = np.nanmean(ndfd_trailing_3, axis=0)
+                generate_ntr_plot(avg_recovery_3, n_lats, n_lons, v_time, fhr, ndfd_run_info, model="NDFD")
+
+                # Trailing Daily Average Logic (Looking for 1100 UTC / ~0600 Local)
+                ndfd_trailing_6.append(recovery)
+                if len(ndfd_trailing_6) > 6:
+                    ndfd_trailing_6.pop(0)
+
+                vt_str = str(v_time)
+                if 'T' in vt_str:
+                    vt_hour = int(vt_str.split('T')[1][:2])
+                    if vt_hour == 11 and len(ndfd_trailing_6) >= 4:
+                        avg_4hr = np.nanmean(ndfd_trailing_6[-4:], axis=0)
+                        generate_daily_plot(avg_4hr, n_lats, n_lons, v_time, day_counter_ndfd, ndfd_run_info, model="NDFD", period="4hr")
+
+                        if len(ndfd_trailing_6) >= 6:
+                            avg_6hr = np.nanmean(ndfd_trailing_6, axis=0)
+                            generate_daily_plot(avg_6hr, n_lats, n_lons, v_time, day_counter_ndfd, ndfd_run_info, model="NDFD", period="6hr")
+                        
+                        day_counter_ndfd += 1
                     
                 fhr += 1
                 
