@@ -2,8 +2,8 @@ name: Nighttime Recovery Map
 
 on:
   schedule:
-    # Runs at 00:30 and 15:30 UTC every day
-    - cron: '30 0,15 * * *'
+    # Runs at 03:30, 09:30, 15:30, and 21:30 UTC
+    - cron: '30 3,9,15,21 * * *'
   workflow_dispatch: # Allows manual run button
 
 permissions:
@@ -22,12 +22,10 @@ jobs:
       with:
         python-version: '3.9'
 
-    # --- THIS WAS MISSING IN YOUR MAIN FILE ---
     - name: Install System Dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y libeccodes-dev libgdal-dev libgeos-dev libproj-dev
-    # ------------------------------------------
 
     - name: Install Dependencies
       run: |
