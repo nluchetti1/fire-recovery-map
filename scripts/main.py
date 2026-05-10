@@ -132,7 +132,7 @@ def plot_verification(f_rec, f_lats, f_lons, o_rec, o_lats, o_lons, valid_time, 
     ax[0].set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
     ax[0].add_feature(cfeature.STATES, linewidth=1.5)
     ax[0].add_feature(USCOUNTIES.with_scale('5m'), linewidth=0.5, alpha=0.5)
-    ax[0].set_title(f"HREF Forecast ({hour_str})\nValid: {valid_time} UTC", fontweight='bold')
+    ax[0].set_title(f"REFS Forecast ({hour_str})\nValid: {valid_time} UTC", fontweight='bold')
     mesh = ax[0].pcolormesh(f_lons, f_lats, f_rec, cmap=cmap, norm=norm, transform=ccrs.PlateCarree(), shading='auto')
     
     ax[1].set_extent(PLOT_EXTENT, crs=ccrs.PlateCarree())
@@ -251,8 +251,8 @@ def generate_daily_plot(recovery_grid, lats, lons, valid_time, day_idx, run_str,
     plt.close()
     print(f"Saved {filename}")
 
-def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
-    print("\n--- Starting Verification Suite (01Z - 12Z) ---")
+def run_verification_logic():
+    print("\n--- Starting Verification Suite (REFS 01Z - 12Z) ---")
     today = datetime.utcnow().date()
     today_str = today.strftime("%Y%m%d")
     
@@ -262,20 +262,36 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
         fhr = v_hour
         hour_str = f"{v_hour:02d}Z"
         
-        href_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/href/prod/href.{today_str}/ensprod/href.t00z.conus.mean.f{fhr:02d}.grib2"
-        href_file = download_file(href_url, f"verif_href_{hour_str}.grib2")
+        refs_url = f"https://noaa-rrfs-pds.s3.amazonaws.com/rrfs_a/refs.{today_str}/00/enspost/refs.t00z.mean.f{fhr:02d}.conus.grib2"
+        refs_file = download_file(refs_url, f"verif_refs_{hour_str}.grib2")
         
         rtma_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/rtma/prod/rtma2p5.{today_str}/rtma2p5.t{hour_str.lower()}.2dvaranl_ndfd.grb2_wexp"
         rtma_file = download_file(rtma_url, f"verif_rtma_{hour_str}.grib2")
         
-        if not href_file or not rtma_file:
+        if not refs_file or not rtma_file:
             continue
 
         try:
-            ds_href = xr.open_dataset(href_file, engine='cfgrib', filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2})
-            ds_href_sub = ds_href.isel(y=y_sl, x=x_sl)
-            rec_href = generate_recovery_map(ds_href_sub['t2m'].values, ds_href_sub['d2m'].values, moe_grid, valid_mask)
+            # Setup REFS Data
+            ds_refs = xr.open_dataset(refs_file, engine='cfgrib', filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2})
+            if not hasattr(ds_refs, 'latitude'):
+                print(f"  -> Skipping REFS Verification f{fhr:02d}: File is missing coordinate data.")
+                ds_refs.close()
+                continue
+                
+            y_sl, x_sl = get_domain_slice(ds_refs, PLOT_EXTENT)
+            ds_refs_sub = ds_refs.isel(y=y_sl, x=x_sl)
             
+            refs_lats = ds_refs_sub.latitude.values
+            refs_lons_raw = ds_refs_sub.longitude.values
+            refs_lons = np.where(refs_lons_raw > 180, refs_lons_raw - 360, refs_lons_raw)
+            refs_moe, refs_mask = prepare_fuel_grid(FUEL_PATH, refs_lats, refs_lons)
+            
+            t_data = ds_refs_sub['t2m'].values if 't2m' in ds_refs_sub.data_vars else ds_refs_sub['2t'].values
+            d_data = ds_refs_sub['d2m'].values if 'd2m' in ds_refs_sub.data_vars else ds_refs_sub['2d'].values
+            rec_refs = generate_recovery_map(t_data, d_data, refs_moe, refs_mask)
+            
+            # Setup RTMA Data
             ds_rtma = xr.open_dataset(rtma_file, engine='cfgrib')
             r_ysl, r_xsl = get_domain_slice(ds_rtma, PLOT_EXTENT)
             ds_rtma_sub = ds_rtma.isel(y=r_ysl, x=r_xsl)
@@ -289,20 +305,21 @@ def run_verification_logic(moe_grid, valid_mask, h_lats, h_lons, y_sl, x_sl):
             d_var = 'd2m' if 'd2m' in ds_rtma_sub else '2d'
             rec_rtma = generate_recovery_map(ds_rtma_sub[t_var].values, ds_rtma_sub[d_var].values, r_moe, r_mask)
             
+            # Plot and save
             save_name = f"verification_{hour_str.lower()}.png"
-            plot_verification(rec_href, h_lats, h_lons, rec_rtma, r_lats, r_lons, f"{today_str} {hour_str[:2]}:00", save_name, hour_str)
+            plot_verification(rec_refs, refs_lats, refs_lons, rec_rtma, r_lats, r_lons, f"{today_str} {hour_str[:2]}:00", save_name, hour_str)
             verif_files.append(os.path.join(IMAGE_DIR, save_name))
             
             if v_hour == 9:
                 shutil.copy(os.path.join(IMAGE_DIR, save_name), os.path.join(IMAGE_DIR, "verification_09z.png"))
             
-            ds_href.close()
+            ds_refs.close()
             ds_rtma.close()
             
         except Exception as e:
             print(f"Verification Failed for {hour_str}: {e}")
         finally:
-            if os.path.exists(href_file): os.remove(href_file)
+            if os.path.exists(refs_file): os.remove(refs_file)
             if os.path.exists(rtma_file): os.remove(rtma_file)
 
     zip_path = os.path.join(IMAGE_DIR, 'verification_suite.zip')
@@ -449,7 +466,7 @@ def main():
     for fhr in range(1, 49):
         base_url = f"https://noaa-rrfs-pds.s3.amazonaws.com/rrfs_a/refs.{date_str_refs}/{run_cycle_refs}/enspost"
         
-        # KEY FIX: Using .mean. instead of .avrg. for instantaneous 2-meter grids
+        # Using .mean. instead of .avrg. for instantaneous 2-meter grids
         filename = f"refs.t{run_cycle_refs}z.mean.f{fhr:02d}.conus.grib2"
         full_url = f"{base_url}/{filename}"
         
@@ -603,8 +620,7 @@ def main():
             if os.path.exists(rh_file): os.remove(rh_file)
 
     if now.hour >= 13:
-        if global_lats is not None:
-            run_verification_logic(global_moe, global_mask, global_lats, global_lons, y_slice, x_slice)
+        run_verification_logic()
     else:
         preserve_verification()
 
