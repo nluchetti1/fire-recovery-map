@@ -336,23 +336,43 @@ def main():
     os.makedirs(IMAGE_DIR, exist_ok=True)
     
     now = datetime.utcnow()
-    run_cycle = "12" if now.hour >= 14 else "00"
-    date_str = now.strftime("%Y%m%d")
-    run_info = f"{date_str} {run_cycle}Z"
+    
+    # --- HREF TIMING ---
+    run_cycle_href = "12" if now.hour >= 14 else "00"
+    date_str_href = now.strftime("%Y%m%d")
+    href_run_info = f"{date_str_href} {run_cycle_href}Z"
+    
+    # --- REFS TIMING (6hr cadence) ---
+    if 3 <= now.hour < 9:
+        run_cycle_refs = "00"
+        date_str_refs = now.strftime("%Y%m%d")
+    elif 9 <= now.hour < 15:
+        run_cycle_refs = "06"
+        date_str_refs = now.strftime("%Y%m%d")
+    elif 15 <= now.hour < 21:
+        run_cycle_refs = "12"
+        date_str_refs = now.strftime("%Y%m%d")
+    else:
+        run_cycle_refs = "18"
+        if now.hour < 3:
+            date_str_refs = (now - timedelta(days=1)).strftime("%Y%m%d")
+        else:
+            date_str_refs = now.strftime("%Y%m%d")
+    refs_run_info = f"{date_str_refs} {run_cycle_refs}Z"
     
     global_lats, global_lons = None, None
     global_moe, global_mask = None, None
     y_slice, x_slice = None, None 
     
-    href_trailing_3 = []
-    href_trailing_6 = [] # Track up to 6 hours for daily mapping
-    day_counter_href = 1
-
     # --- 1. HREF 48 HOUR FORECAST LOOP ---
     print("--- Processing HREF ---")
+    href_trailing_3 = []
+    href_trailing_6 = [] 
+    day_counter_href = 1
+    
     for fhr in range(1, 49):
-        base_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/href/prod/href.{date_str}/ensprod"
-        filename = f"href.t{run_cycle}z.conus.mean.f{fhr:02d}.grib2"
+        base_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/href/prod/href.{date_str_href}/ensprod"
+        filename = f"href.t{run_cycle_href}z.conus.mean.f{fhr:02d}.grib2"
         full_url = f"{base_url}/{filename}"
         
         grib = download_file(full_url, filename)
@@ -376,7 +396,7 @@ def main():
             recovery = generate_recovery_map(ds_sub['t2m'].values, ds_sub['d2m'].values, global_moe, global_mask)
             
             # Plot standard hour map
-            generate_main_plot(recovery, global_lats, global_lons, ds_sub.valid_time.values, fhr, run_info, model="HREF")
+            generate_main_plot(recovery, global_lats, global_lons, ds_sub.valid_time.values, fhr, href_run_info, model="HREF")
             
             # Trailing 3-Hour Average Logic
             href_trailing_3.append(recovery)
@@ -384,7 +404,7 @@ def main():
                 href_trailing_3.pop(0) 
             
             avg_recovery_3 = np.nanmean(href_trailing_3, axis=0)
-            generate_ntr_plot(avg_recovery_3, global_lats, global_lons, ds_sub.valid_time.values, fhr, run_info, model="HREF")
+            generate_ntr_plot(avg_recovery_3, global_lats, global_lons, ds_sub.valid_time.values, fhr, href_run_info, model="HREF")
                 
             # Trailing Daily Average Logic (Looking for 1100 UTC / ~0600 Local)
             href_trailing_6.append(recovery)
@@ -396,11 +416,11 @@ def main():
                 vt_hour = int(vt_str.split('T')[1][:2])
                 if vt_hour == 11 and len(href_trailing_6) >= 4:
                     avg_4hr = np.nanmean(href_trailing_6[-4:], axis=0)
-                    generate_daily_plot(avg_4hr, global_lats, global_lons, ds_sub.valid_time.values, day_counter_href, run_info, model="HREF", period="4hr")
+                    generate_daily_plot(avg_4hr, global_lats, global_lons, ds_sub.valid_time.values, day_counter_href, href_run_info, model="HREF", period="4hr")
 
                     if len(href_trailing_6) >= 6:
                         avg_6hr = np.nanmean(href_trailing_6, axis=0)
-                        generate_daily_plot(avg_6hr, global_lats, global_lons, ds_sub.valid_time.values, day_counter_href, run_info, model="HREF", period="6hr")
+                        generate_daily_plot(avg_6hr, global_lats, global_lons, ds_sub.valid_time.values, day_counter_href, href_run_info, model="HREF", period="6hr")
                     
                     day_counter_href += 1
 
@@ -411,7 +431,72 @@ def main():
         finally:
             if os.path.exists(filename): os.remove(filename)
 
-    # --- 2. NDFD FORECAST LOOP ---
+    # --- 2. REFS 48 HOUR FORECAST LOOP ---
+    print("\n--- Processing REFS ---")
+    refs_trailing_3 = []
+    refs_trailing_6 = [] 
+    day_counter_refs = 1
+    
+    for fhr in range(1, 49):
+        base_url = f"https://noaa-rrfs-pds.s3.amazonaws.com/rrfs_a/refs.{date_str_refs}/{run_cycle_refs}/enspost"
+        filename = f"refs.t{run_cycle_refs}z.avrg.f{fhr:02d}.conus.grib2"
+        full_url = f"{base_url}/{filename}"
+        
+        grib = download_file(full_url, filename)
+        if not grib: continue
+
+        try:
+            ds_refs = xr.open_dataset(grib, engine='cfgrib', 
+                                      filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2})
+            
+            # Slice independently to accommodate potential minor grid differences
+            r_ysl, r_xsl = get_domain_slice(ds_refs, PLOT_EXTENT)
+            ds_refs_sub = ds_refs.isel(y=r_ysl, x=r_xsl)
+            
+            r_lats = ds_refs_sub.latitude.values
+            r_lons_raw = ds_refs_sub.longitude.values
+            r_lons = np.where(r_lons_raw > 180, r_lons_raw - 360, r_lons_raw)
+            r_moe, r_mask = prepare_fuel_grid(FUEL_PATH, r_lats, r_lons)
+
+            t_data = ds_refs_sub['t2m'].values if 't2m' in ds_refs_sub.data_vars else ds_refs_sub['2t'].values
+            d_data = ds_refs_sub['d2m'].values if 'd2m' in ds_refs_sub.data_vars else ds_refs_sub['2d'].values
+
+            recovery = generate_recovery_map(t_data, d_data, r_moe, r_mask)
+            
+            generate_main_plot(recovery, r_lats, r_lons, ds_refs_sub.valid_time.values, fhr, refs_run_info, model="REFS")
+            
+            refs_trailing_3.append(recovery)
+            if len(refs_trailing_3) > 3:
+                refs_trailing_3.pop(0) 
+            
+            avg_recovery_3 = np.nanmean(refs_trailing_3, axis=0)
+            generate_ntr_plot(avg_recovery_3, r_lats, r_lons, ds_refs_sub.valid_time.values, fhr, refs_run_info, model="REFS")
+                
+            refs_trailing_6.append(recovery)
+            if len(refs_trailing_6) > 6:
+                refs_trailing_6.pop(0)
+
+            vt_str = str(ds_refs_sub.valid_time.values)
+            if 'T' in vt_str:
+                vt_hour = int(vt_str.split('T')[1][:2])
+                if vt_hour == 11 and len(refs_trailing_6) >= 4:
+                    avg_4hr = np.nanmean(refs_trailing_6[-4:], axis=0)
+                    generate_daily_plot(avg_4hr, r_lats, r_lons, ds_refs_sub.valid_time.values, day_counter_refs, refs_run_info, model="REFS", period="4hr")
+
+                    if len(refs_trailing_6) >= 6:
+                        avg_6hr = np.nanmean(refs_trailing_6, axis=0)
+                        generate_daily_plot(avg_6hr, r_lats, r_lons, ds_refs_sub.valid_time.values, day_counter_refs, refs_run_info, model="REFS", period="6hr")
+                    
+                    day_counter_refs += 1
+
+            ds_refs.close()
+
+        except Exception as e:
+            print(f"Error f{fhr:02d}: {e}")
+        finally:
+            if os.path.exists(filename): os.remove(filename)
+
+    # --- 3. NDFD FORECAST LOOP ---
     print("\n--- Processing NDFD ---")
     ndfd_temp_url = "https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus/VP.001-003/ds.temp.bin"
     ndfd_rh_url = "https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus/VP.001-003/ds.rhm.bin"
@@ -420,7 +505,7 @@ def main():
     rh_file = download_file(ndfd_rh_url, "ndfd_rh.grib2")
 
     ndfd_trailing_3 = []
-    ndfd_trailing_6 = [] # Track up to 6 hours for daily mapping
+    ndfd_trailing_6 = [] 
     day_counter_ndfd = 1
 
     if temp_file and rh_file:
@@ -464,10 +549,8 @@ def main():
                 
                 recovery = generate_recovery_map_from_rh(t_data, rh_data, n_moe, n_mask)
                 
-                # Plot standard hour map
                 generate_main_plot(recovery, n_lats, n_lons, v_time, fhr, ndfd_run_info, model="NDFD")
                 
-                # Trailing 3-Hour Average Logic
                 ndfd_trailing_3.append(recovery)
                 if len(ndfd_trailing_3) > 3:
                     ndfd_trailing_3.pop(0)
@@ -475,7 +558,6 @@ def main():
                 avg_recovery_3 = np.nanmean(ndfd_trailing_3, axis=0)
                 generate_ntr_plot(avg_recovery_3, n_lats, n_lons, v_time, fhr, ndfd_run_info, model="NDFD")
 
-                # Trailing Daily Average Logic (Looking for 1100 UTC / ~0600 Local)
                 ndfd_trailing_6.append(recovery)
                 if len(ndfd_trailing_6) > 6:
                     ndfd_trailing_6.pop(0)
