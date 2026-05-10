@@ -183,12 +183,14 @@
                 <option value="" disabled>--- Hourly Forecasts ---</option>
                 <option value="ndfd" selected>NWS NDFD (Hourly)</option>
                 <option value="href">HREF Ensemble (Hourly)</option>
+                <option value="refs">REFS Ensemble (Hourly)</option>
             </select>
             
             <select id="ntr-select" onchange="setNTRMode()" style="background-color: #fce4ec; color: #880e4f;">
                 <option value="" disabled selected>--- 3-Hour Trailing Averages ---</option>
                 <option value="ndfd">NDFD 3-Hour Average</option>
                 <option value="href">HREF 3-Hour Average</option>
+                <option value="refs">REFS 3-Hour Average</option>
             </select>
 
             <select id="daily-select" onchange="setDailyMode()" style="background-color: #e8f5e9; color: #1b5e20;">
@@ -197,6 +199,8 @@
                 <option value="ndfd-6hr">NDFD 6-Hour Daily</option>
                 <option value="href-4hr">HREF 4-Hour Daily</option>
                 <option value="href-6hr">HREF 6-Hour Daily</option>
+                <option value="refs-4hr">REFS 4-Hour Daily</option>
+                <option value="refs-6hr">REFS 6-Hour Daily</option>
             </select>
 
             <div id="nav-hints">
