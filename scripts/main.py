@@ -95,6 +95,9 @@ def download_file(url, local_filename):
     }
     try:
         with requests.get(url, stream=True, timeout=60, headers=headers) as r:
+            if r.status_code == 404:
+                print(f" -> File not found (404): {url}")
+                return None
             r.raise_for_status()
             with open(local_filename, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
@@ -382,6 +385,12 @@ def main():
             ds = xr.open_dataset(grib, engine='cfgrib', 
                                  filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2})
             
+            # --- SAFETY CHECK FOR INCOMPLETE FILES ---
+            if not hasattr(ds, 'latitude'):
+                print(f"  -> Skipping f{fhr:02d}: File is missing coordinate data (likely incomplete/corrupt).")
+                ds.close()
+                continue
+            
             if global_lats is None:
                 y_slice, x_slice = get_domain_slice(ds, PLOT_EXTENT)
                 ds_sub = ds.isel(y=y_slice, x=x_slice)
@@ -439,7 +448,9 @@ def main():
     
     for fhr in range(1, 49):
         base_url = f"https://noaa-rrfs-pds.s3.amazonaws.com/rrfs_a/refs.{date_str_refs}/{run_cycle_refs}/enspost"
-        filename = f"refs.t{run_cycle_refs}z.avrg.f{fhr:02d}.conus.grib2"
+        
+        # KEY FIX: Using .mean. instead of .avrg. for instantaneous 2-meter grids
+        filename = f"refs.t{run_cycle_refs}z.mean.f{fhr:02d}.conus.grib2"
         full_url = f"{base_url}/{filename}"
         
         grib = download_file(full_url, filename)
@@ -449,6 +460,12 @@ def main():
             ds_refs = xr.open_dataset(grib, engine='cfgrib', 
                                       filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2})
             
+            # --- SAFETY CHECK FOR INCOMPLETE FILES ---
+            if not hasattr(ds_refs, 'latitude'):
+                print(f"  -> Skipping f{fhr:02d}: File is missing coordinate data (likely incomplete/corrupt).")
+                ds_refs.close()
+                continue
+
             # Slice independently to accommodate potential minor grid differences
             r_ysl, r_xsl = get_domain_slice(ds_refs, PLOT_EXTENT)
             ds_refs_sub = ds_refs.isel(y=r_ysl, x=r_xsl)
