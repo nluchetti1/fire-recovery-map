@@ -12,6 +12,7 @@ import xarray as xr
 import rasterio
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+import matplotlib.patches as mpatches
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from metpy.plots import USCOUNTIES
@@ -120,22 +121,29 @@ def generate_recovery_map_from_rh(t_k, rh, moe_grid, valid_mask):
     recovery = (fm / moe_grid) * 100
     return np.where(valid_mask, recovery, np.nan)
 
-def get_criteria_text():
-    return (
-        "Threshold Criteria:\n"
-        "Ratio = (EMC / MOE) * 100\n"
-        "-----------------------\n\n"
-        "Excellent (Blue):\n"
-        ">= 95%\n"
-        "Too wet to burn.\n\n"
-        "Good (Green):\n"
-        "70 - 94%\n\n"
-        "Fair (Orange):\n"
-        "50 - 69%\n\n"
-        "Poor (Red):\n"
-        "< 50%\n"
-        "Critically dry."
+def add_custom_annotations(fig, ax_for_legend):
+    # Spiced up colored patches for the threshold criteria box
+    legend_elements = [
+        mpatches.Patch(facecolor='#1976d2', edgecolor='black', label='Excellent (>= 95%)\nToo wet to burn'),
+        mpatches.Patch(facecolor='#388e3c', edgecolor='black', label='Good (70 - 94%)'),
+        mpatches.Patch(facecolor='#ffa000', edgecolor='black', label='Fair (50 - 69%)'),
+        mpatches.Patch(facecolor='#d32f2f', edgecolor='black', label='Poor (< 50%)\nCritically dry')
+    ]
+    
+    legend = ax_for_legend.legend(handles=legend_elements, loc='center left', bbox_to_anchor=(1.03, 0.5),
+                                  title="Threshold Criteria:\nRatio = (EMC / MOE) * 100",
+                                  frameon=True, edgecolor='gray', facecolor='white', borderpad=1.2, labelspacing=1.4)
+    legend.get_title().set_fontweight('bold')
+    legend.get_title().set_fontsize(11)
+    
+    # Definition Text pinned to the bottom of the figure
+    def_text = (
+        "EMC (Equilibrium Moisture Content): The moisture level dead fuels absorb from the humid air.\n"
+        "MOE (Moisture of Extinction): The specific moisture threshold at which fire in a given fuel type stops spreading."
     )
+    
+    fig.text(0.5, -0.05, def_text, ha='center', va='top', fontsize=9, style='italic', color='#333333',
+             bbox=dict(boxstyle="round,pad=0.6", facecolor="#f8f9fa", edgecolor="#cccccc", linewidth=1))
 
 def plot_verification(f_rec, f_lats, f_lons, o_rec, o_lats, o_lons, valid_time, save_name, hour_str):
     fig, ax = plt.subplots(1, 2, figsize=(16, 8), 
@@ -158,15 +166,13 @@ def plot_verification(f_rec, f_lats, f_lons, o_rec, o_lats, o_lons, valid_time, 
     ax[1].set_title(f"RTMA Observed ({hour_str})\nValid: {valid_time} UTC", fontweight='bold')
     ax[1].pcolormesh(o_lons, o_lats, o_rec, cmap=cmap, norm=norm, transform=ccrs.PlateCarree(), shading='auto')
 
-    # Standard Horizontal Colorbar at the bottom
+    # Standard Horizontal Colorbar
     cbar = plt.colorbar(mesh, ax=ax.ravel().tolist(), orientation='horizontal', pad=0.05, aspect=50, shrink=0.6)
     cbar.set_ticks([25, 60, 82.5, 147.5])
     cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'])
     
-    # Conditional Legend Box on the right side
-    ax[1].text(1.02, 0.5, get_criteria_text(), transform=ax[1].transAxes, fontsize=10,
-               va='center', ha='left',
-               bbox=dict(boxstyle="round,pad=0.5", facecolor="white", edgecolor="gray"))
+    # Custom colored right-side legend & definitions
+    add_custom_annotations(fig, ax[1])
 
     save_path = os.path.join(IMAGE_DIR, save_name)
     plt.savefig(save_path, bbox_inches='tight')
@@ -198,15 +204,13 @@ def generate_main_plot(recovery_grid, lats, lons, valid_time, fhr, run_str, mode
     plt.title(f"{model} Nighttime Fuel Recovery\nValid: {d_str} {t_str}Z (F{fhr:02d})", loc='left', fontsize=12, fontweight='bold')
     plt.title(f"Run: {run_str}", loc='right', fontsize=10)
     
-    # Standard Horizontal Colorbar at the bottom
+    # Standard Horizontal Colorbar
     cbar = plt.colorbar(mesh, orientation='horizontal', pad=0.05, aspect=35, shrink=0.8)
     cbar.set_ticks([25, 60, 82.5, 147.5])
     cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'])
 
-    # Conditional Legend Box on the right side
-    ax.text(1.02, 0.5, get_criteria_text(), transform=ax.transAxes, fontsize=10,
-            va='center', ha='left',
-            bbox=dict(boxstyle="round,pad=0.5", facecolor="white", edgecolor="gray"))
+    # Custom colored right-side legend & definitions
+    add_custom_annotations(fig, ax)
 
     filename = f"{model.lower()}_recovery_f{fhr:02d}.png"
     save_path = os.path.join(IMAGE_DIR, filename)
@@ -239,15 +243,13 @@ def generate_ntr_plot(recovery_grid, lats, lons, valid_time, fhr, run_str, model
     plt.title(f"{model} 3-Hour Trailing Avg Recovery\nValid: {d_str} {t_str}Z (F{fhr:02d})", loc='left', fontsize=12, fontweight='bold')
     plt.title(f"Run: {run_str}", loc='right', fontsize=10)
     
-    # Standard Horizontal Colorbar at the bottom
+    # Standard Horizontal Colorbar
     cbar = plt.colorbar(mesh, orientation='horizontal', pad=0.05, aspect=35, shrink=0.8)
     cbar.set_ticks([25, 60, 82.5, 147.5])
     cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'])
 
-    # Conditional Legend Box on the right side
-    ax.text(1.02, 0.5, get_criteria_text(), transform=ax.transAxes, fontsize=10,
-            va='center', ha='left',
-            bbox=dict(boxstyle="round,pad=0.5", facecolor="white", edgecolor="gray"))
+    # Custom colored right-side legend & definitions
+    add_custom_annotations(fig, ax)
 
     filename = f"ntr_{model.lower()}_f{fhr:02d}.png"
     save_path = os.path.join(IMAGE_DIR, filename)
@@ -279,15 +281,13 @@ def generate_daily_plot(recovery_grid, lats, lons, valid_time, day_idx, run_str,
     plt.title(f"{model} Daily {period} Avg Recovery (Ending 0600 Local)\nValid: {d_str} (Day {day_idx})", loc='left', fontsize=12, fontweight='bold')
     plt.title(f"Run: {run_str}", loc='right', fontsize=10)
     
-    # Standard Horizontal Colorbar at the bottom
+    # Standard Horizontal Colorbar
     cbar = plt.colorbar(mesh, orientation='horizontal', pad=0.05, aspect=35, shrink=0.8)
     cbar.set_ticks([25, 60, 82.5, 147.5])
     cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'])
 
-    # Conditional Legend Box on the right side
-    ax.text(1.02, 0.5, get_criteria_text(), transform=ax.transAxes, fontsize=10,
-            va='center', ha='left',
-            bbox=dict(boxstyle="round,pad=0.5", facecolor="white", edgecolor="gray"))
+    # Custom colored right-side legend & definitions
+    add_custom_annotations(fig, ax)
 
     filename = f"daily_{period}_{model.lower()}_day{day_idx}.png"
     save_path = os.path.join(IMAGE_DIR, filename)
