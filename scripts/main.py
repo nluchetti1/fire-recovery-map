@@ -108,6 +108,13 @@ def download_file(url, local_filename):
         print(f" -> Failed to download {local_filename}: {e}")
         return None
 
+def get_var_data(ds, possible_names):
+    """Helper function to safely extract variables regardless of NOAA naming conventions."""
+    for name in possible_names:
+        if name in ds.data_vars:
+            return ds[name].values
+    return None
+
 def generate_recovery_map(t_k, d_k, moe_grid, valid_mask):
     rh = calculate_rh(t_k, d_k)
     t_f = (t_k - 273.15) * 9/5 + 32
@@ -122,7 +129,7 @@ def generate_recovery_map_from_rh(t_k, rh, moe_grid, valid_mask):
     return np.where(valid_mask, recovery, np.nan)
 
 def add_custom_annotations(fig, ax_for_legend):
-    # Spiced up colored patches for the threshold criteria box
+    # Main Threshold Box
     legend_elements = [
         mpatches.Patch(facecolor='#1976d2', edgecolor='black', label='Excellent (>= 95%)\nToo wet to burn'),
         mpatches.Patch(facecolor='#388e3c', edgecolor='black', label='Good (70 - 94%)'),
@@ -130,20 +137,26 @@ def add_custom_annotations(fig, ax_for_legend):
         mpatches.Patch(facecolor='#d32f2f', edgecolor='black', label='Poor (< 50%)\nCritically dry')
     ]
     
-    legend = ax_for_legend.legend(handles=legend_elements, loc='center left', bbox_to_anchor=(1.03, 0.5),
+    legend = ax_for_legend.legend(handles=legend_elements, loc='center left', bbox_to_anchor=(1.03, 0.65),
                                   title="Threshold Criteria:\nRatio = (EMC / MOE) * 100",
-                                  frameon=True, edgecolor='gray', facecolor='white', borderpad=1.2, labelspacing=1.4)
+                                  frameon=True, edgecolor='gray', facecolor='white', borderpad=1.0, labelspacing=1.2)
     legend.get_title().set_fontweight('bold')
     legend.get_title().set_fontsize(11)
     
-    # Definition Text pinned to the bottom of the figure
+    # Definition Text compactly nested below the Threshold Box on the right side
     def_text = (
-        "EMC (Equilibrium Moisture Content): The moisture level dead fuels absorb from the humid air.\n"
-        "MOE (Moisture of Extinction): The specific moisture threshold at which fire in a given fuel type stops spreading."
+        "Definitions:\n\n"
+        "EMC: Equilibrium Moisture Content.\n"
+        "The moisture level dead fuels absorb\n"
+        "from the humid air.\n\n"
+        "MOE: Moisture of Extinction.\n"
+        "The moisture threshold at which fire\n"
+        "in a specific fuel stops spreading."
     )
     
-    fig.text(0.5, -0.05, def_text, ha='center', va='top', fontsize=9, style='italic', color='#333333',
-             bbox=dict(boxstyle="round,pad=0.6", facecolor="#f8f9fa", edgecolor="#cccccc", linewidth=1))
+    ax_for_legend.text(1.03, 0.35, def_text, transform=ax_for_legend.transAxes,
+                       va='top', ha='left', fontsize=8.5, style='italic', color='#333333',
+                       bbox=dict(boxstyle="round,pad=0.6", facecolor="#f8f9fa", edgecolor="#cccccc", linewidth=1))
 
 def plot_verification(f_rec, f_lats, f_lons, o_rec, o_lats, o_lons, valid_time, save_name, hour_str):
     fig, ax = plt.subplots(1, 2, figsize=(16, 8), 
@@ -167,7 +180,7 @@ def plot_verification(f_rec, f_lats, f_lons, o_rec, o_lats, o_lons, valid_time, 
     ax[1].pcolormesh(o_lons, o_lats, o_rec, cmap=cmap, norm=norm, transform=ccrs.PlateCarree(), shading='auto')
 
     # Standard Horizontal Colorbar
-    cbar = plt.colorbar(mesh, ax=ax.ravel().tolist(), orientation='horizontal', pad=0.05, aspect=50, shrink=0.6)
+    cbar = plt.colorbar(mesh, ax=ax.ravel().tolist(), orientation='horizontal', pad=0.04, aspect=50, shrink=0.6)
     cbar.set_ticks([25, 60, 82.5, 147.5])
     cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'])
     
@@ -205,7 +218,7 @@ def generate_main_plot(recovery_grid, lats, lons, valid_time, fhr, run_str, mode
     plt.title(f"Run: {run_str}", loc='right', fontsize=10)
     
     # Standard Horizontal Colorbar
-    cbar = plt.colorbar(mesh, orientation='horizontal', pad=0.05, aspect=35, shrink=0.8)
+    cbar = plt.colorbar(mesh, orientation='horizontal', pad=0.04, aspect=35, shrink=0.8)
     cbar.set_ticks([25, 60, 82.5, 147.5])
     cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'])
 
@@ -244,7 +257,7 @@ def generate_ntr_plot(recovery_grid, lats, lons, valid_time, fhr, run_str, model
     plt.title(f"Run: {run_str}", loc='right', fontsize=10)
     
     # Standard Horizontal Colorbar
-    cbar = plt.colorbar(mesh, orientation='horizontal', pad=0.05, aspect=35, shrink=0.8)
+    cbar = plt.colorbar(mesh, orientation='horizontal', pad=0.04, aspect=35, shrink=0.8)
     cbar.set_ticks([25, 60, 82.5, 147.5])
     cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'])
 
@@ -282,7 +295,7 @@ def generate_daily_plot(recovery_grid, lats, lons, valid_time, day_idx, run_str,
     plt.title(f"Run: {run_str}", loc='right', fontsize=10)
     
     # Standard Horizontal Colorbar
-    cbar = plt.colorbar(mesh, orientation='horizontal', pad=0.05, aspect=35, shrink=0.8)
+    cbar = plt.colorbar(mesh, orientation='horizontal', pad=0.04, aspect=35, shrink=0.8)
     cbar.set_ticks([25, 60, 82.5, 147.5])
     cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'])
 
@@ -331,8 +344,8 @@ def run_verification_logic():
             refs_lons = np.where(refs_lons_raw > 180, refs_lons_raw - 360, refs_lons_raw)
             refs_moe, refs_mask = prepare_fuel_grid(FUEL_PATH, refs_lats, refs_lons)
             
-            t_data = ds_refs_sub['t2m'].values if 't2m' in ds_refs_sub.data_vars else ds_refs_sub['2t'].values
-            d_data = ds_refs_sub['d2m'].values if 'd2m' in ds_refs_sub.data_vars else ds_refs_sub['2d'].values
+            t_data = get_var_data(ds_refs_sub, ['t2m', '2t', 't', 'temp'])
+            d_data = get_var_data(ds_refs_sub, ['d2m', '2d', 'd', 'dewp'])
             rec_refs = generate_recovery_map(t_data, d_data, refs_moe, refs_mask)
             
             # Setup RTMA Data
@@ -345,9 +358,9 @@ def run_verification_logic():
             r_lons = np.where(r_lons > 180, r_lons - 360, r_lons)
             r_moe, r_mask = prepare_fuel_grid(FUEL_PATH, r_lats, r_lons)
             
-            t_var = 't2m' if 't2m' in ds_rtma_sub else '2t'
-            d_var = 'd2m' if 'd2m' in ds_rtma_sub else '2d'
-            rec_rtma = generate_recovery_map(ds_rtma_sub[t_var].values, ds_rtma_sub[d_var].values, r_moe, r_mask)
+            rtma_t_data = get_var_data(ds_rtma_sub, ['t2m', '2t', 't', 'temp'])
+            rtma_d_data = get_var_data(ds_rtma_sub, ['d2m', '2d', 'd', 'dewp'])
+            rec_rtma = generate_recovery_map(rtma_t_data, rtma_d_data, r_moe, r_mask)
             
             # Plot and save
             save_name = f"verification_{hour_str.lower()}.png"
@@ -462,8 +475,10 @@ def main():
                 global_moe, global_mask = prepare_fuel_grid(FUEL_PATH, global_lats, global_lons)
             else:
                 ds_sub = ds.isel(y=y_slice, x=x_slice)
-
-            recovery = generate_recovery_map(ds_sub['t2m'].values, ds_sub['d2m'].values, global_moe, global_mask)
+            
+            t_data = get_var_data(ds_sub, ['t2m', '2t', 't', 'temp'])
+            d_data = get_var_data(ds_sub, ['d2m', '2d', 'd', 'dewp'])
+            recovery = generate_recovery_map(t_data, d_data, global_moe, global_mask)
             
             # Plot standard hour map
             generate_main_plot(recovery, global_lats, global_lons, ds_sub.valid_time.values, fhr, href_run_info, model="HREF")
@@ -536,8 +551,8 @@ def main():
             r_lons = np.where(r_lons_raw > 180, r_lons_raw - 360, r_lons_raw)
             r_moe, r_mask = prepare_fuel_grid(FUEL_PATH, r_lats, r_lons)
 
-            t_data = ds_refs_sub['t2m'].values if 't2m' in ds_refs_sub.data_vars else ds_refs_sub['2t'].values
-            d_data = ds_refs_sub['d2m'].values if 'd2m' in ds_refs_sub.data_vars else ds_refs_sub['2d'].values
+            t_data = get_var_data(ds_refs_sub, ['t2m', '2t', 't', 'temp'])
+            d_data = get_var_data(ds_refs_sub, ['d2m', '2d', 'd', 'dewp'])
 
             recovery = generate_recovery_map(t_data, d_data, r_moe, r_mask)
             
@@ -588,8 +603,14 @@ def main():
 
     if temp_file and rh_file:
         try:
-            ds_t = xr.open_dataset(temp_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': '2t'}})
-            ds_rh = xr.open_dataset(rh_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': '2r'}})
+            try:
+                # Try opening without filters (NDFD usually contains a single parameter per file)
+                ds_t = xr.open_dataset(temp_file, engine='cfgrib')
+                ds_rh = xr.open_dataset(rh_file, engine='cfgrib')
+            except Exception:
+                # Fallback if multiple hypercubes are found
+                ds_t = xr.open_dataset(temp_file, engine='cfgrib', filter_by_keys={'typeOfLevel': 'heightAboveGround'})
+                ds_rh = xr.open_dataset(rh_file, engine='cfgrib', filter_by_keys={'typeOfLevel': 'heightAboveGround'})
 
             n_ysl, n_xsl = get_domain_slice(ds_t, PLOT_EXTENT)
             ds_t_sub = ds_t.isel(y=n_ysl, x=n_xsl)
@@ -616,14 +637,15 @@ def main():
             for v_time in np.sort(common_times):
                 if fhr > 48: break 
                 
-                t_idx = np.where(valid_times_t == v_time)[0][0]
-                rh_idx = np.where(valid_times_rh == v_time)[0][0]
+                # Use .sel() for highly robust time slicing to avoid step dimension mismatch
+                t_step = ds_t_sub.sel(valid_time=v_time)
+                rh_step = ds_rh_sub.sel(valid_time=v_time)
                 
-                t_step = ds_t_sub.isel(step=t_idx)
-                rh_step = ds_rh_sub.isel(step=rh_idx)
+                t_data = get_var_data(t_step, ['t2m', '2t', 't', 'temp'])
+                rh_data = get_var_data(rh_step, ['r2', '2r', 'r', 'rh', 'rhm'])
                 
-                t_data = t_step['t2m'].values if 't2m' in t_step.data_vars else t_step['2t'].values
-                rh_data = rh_step['r2'].values if 'r2' in rh_step.data_vars else rh_step['2r'].values
+                if t_data is None or rh_data is None:
+                    continue
                 
                 recovery = generate_recovery_map_from_rh(t_data, rh_data, n_moe, n_mask)
                 
