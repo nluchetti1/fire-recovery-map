@@ -141,9 +141,13 @@ def plot_verification(f_rec, f_lats, f_lons, o_rec, o_lats, o_lons, valid_time, 
     ax[1].set_title(f"RTMA Observed ({hour_str})\nValid: {valid_time} UTC", fontweight='bold')
     ax[1].pcolormesh(o_lons, o_lats, o_rec, cmap=cmap, norm=norm, transform=ccrs.PlateCarree(), shading='auto')
 
-    cbar = plt.colorbar(mesh, ax=ax.ravel().tolist(), orientation='horizontal', pad=0.05, aspect=50, shrink=0.6)
+    # Vertical Legend
+    cbar = plt.colorbar(mesh, ax=ax.ravel().tolist(), orientation='vertical', pad=0.03, aspect=30, shrink=0.85)
     cbar.set_ticks([25, 60, 82.5, 147.5])
-    cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'])
+    cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'], fontweight='bold', fontsize=10)
+    cbar.set_label('Fuel Moisture % relative to Stop Point (MOE)', fontweight='bold', fontsize=12, labelpad=15)
+    cbar.outline.set_linewidth(2)
+    cbar.outline.set_edgecolor('black')
     
     save_path = os.path.join(IMAGE_DIR, save_name)
     plt.savefig(save_path, bbox_inches='tight')
@@ -174,9 +178,14 @@ def generate_main_plot(recovery_grid, lats, lons, valid_time, fhr, run_str, mode
     d_str = str(valid_time).split('T')[0]
     plt.title(f"{model} Nighttime Fuel Recovery\nValid: {d_str} {t_str}Z (F{fhr:02d})", loc='left', fontsize=12, fontweight='bold')
     plt.title(f"Run: {run_str}", loc='right', fontsize=10)
-    cbar = plt.colorbar(mesh, orientation='horizontal', pad=0.05, aspect=35, shrink=0.8)
+    
+    # Vertical Legend
+    cbar = plt.colorbar(mesh, ax=ax, orientation='vertical', pad=0.04, aspect=25, shrink=0.8)
     cbar.set_ticks([25, 60, 82.5, 147.5])
-    cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'])
+    cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'], fontweight='bold', fontsize=9)
+    cbar.set_label('Fuel Moisture % relative to Stop Point (MOE)', fontweight='bold', fontsize=11, labelpad=10)
+    cbar.outline.set_linewidth(2)
+    cbar.outline.set_edgecolor('black')
 
     filename = f"{model.lower()}_recovery_f{fhr:02d}.png"
     save_path = os.path.join(IMAGE_DIR, filename)
@@ -208,9 +217,14 @@ def generate_ntr_plot(recovery_grid, lats, lons, valid_time, fhr, run_str, model
     d_str = str(valid_time).split('T')[0]
     plt.title(f"{model} 3-Hour Trailing Avg Recovery\nValid: {d_str} {t_str}Z (F{fhr:02d})", loc='left', fontsize=12, fontweight='bold')
     plt.title(f"Run: {run_str}", loc='right', fontsize=10)
-    cbar = plt.colorbar(mesh, orientation='horizontal', pad=0.05, aspect=35, shrink=0.8)
+    
+    # Vertical Legend
+    cbar = plt.colorbar(mesh, ax=ax, orientation='vertical', pad=0.04, aspect=25, shrink=0.8)
     cbar.set_ticks([25, 60, 82.5, 147.5])
-    cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'])
+    cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'], fontweight='bold', fontsize=9)
+    cbar.set_label('Fuel Moisture % relative to Stop Point (MOE)', fontweight='bold', fontsize=11, labelpad=10)
+    cbar.outline.set_linewidth(2)
+    cbar.outline.set_edgecolor('black')
 
     filename = f"ntr_{model.lower()}_f{fhr:02d}.png"
     save_path = os.path.join(IMAGE_DIR, filename)
@@ -241,9 +255,14 @@ def generate_daily_plot(recovery_grid, lats, lons, valid_time, day_idx, run_str,
     d_str = str(valid_time).split('T')[0]
     plt.title(f"{model} Daily {period} Avg Recovery (Ending 0600 Local)\nValid: {d_str} (Day {day_idx})", loc='left', fontsize=12, fontweight='bold')
     plt.title(f"Run: {run_str}", loc='right', fontsize=10)
-    cbar = plt.colorbar(mesh, orientation='horizontal', pad=0.05, aspect=35, shrink=0.8)
+    
+    # Vertical Legend
+    cbar = plt.colorbar(mesh, ax=ax, orientation='vertical', pad=0.04, aspect=25, shrink=0.8)
     cbar.set_ticks([25, 60, 82.5, 147.5])
-    cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'])
+    cbar.set_ticklabels(['POOR', 'FAIR', 'GOOD', 'EXCELLENT'], fontweight='bold', fontsize=9)
+    cbar.set_label('Fuel Moisture % relative to Stop Point (MOE)', fontweight='bold', fontsize=11, labelpad=10)
+    cbar.outline.set_linewidth(2)
+    cbar.outline.set_edgecolor('black')
 
     filename = f"daily_{period}_{model.lower()}_day{day_idx}.png"
     save_path = os.path.join(IMAGE_DIR, filename)
