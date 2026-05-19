@@ -637,9 +637,31 @@ def main():
             for v_time in np.sort(common_times):
                 if fhr > 48: break 
                 
-                # Use .sel() for highly robust time slicing to avoid step dimension mismatch
-                t_step = ds_t_sub.sel(valid_time=v_time)
-                rh_step = ds_rh_sub.sel(valid_time=v_time)
+                t_idx_arr = np.where(valid_times_t == v_time)[0]
+                rh_idx_arr = np.where(valid_times_rh == v_time)[0]
+                
+                if len(t_idx_arr) == 0 or len(rh_idx_arr) == 0:
+                    continue
+                    
+                t_idx = t_idx_arr[0]
+                rh_idx = rh_idx_arr[0]
+                
+                # Safely slice using integer indexing on the first dimension
+                try:
+                    t_step = ds_t_sub.isel(step=t_idx)
+                except ValueError:
+                    try:
+                        t_step = ds_t_sub.isel(time=t_idx)
+                    except ValueError:
+                        t_step = ds_t_sub
+                        
+                try:
+                    rh_step = ds_rh_sub.isel(step=rh_idx)
+                except ValueError:
+                    try:
+                        rh_step = ds_rh_sub.isel(time=rh_idx)
+                    except ValueError:
+                        rh_step = ds_rh_sub
                 
                 t_data = get_var_data(t_step, ['t2m', '2t', 't', 'temp'])
                 rh_data = get_var_data(rh_step, ['r2', '2r', 'r', 'rh', 'rhm'])
