@@ -319,7 +319,7 @@ def run_verification_logic():
         fhr = v_hour
         hour_str = f"{v_hour:02d}Z"
         
-        refs_url = f"https://noaa-rrfs-pds.s3.amazonaws.com/rrfs_a/refs.{today_str}/00/enspost/refs.t00z.mean.f{fhr:02d}.conus.grib2"
+        refs_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/refs/para/refs.{today_str}/00/ensprod/refs.t00z.mean.f{fhr:02d}.conus.grib2"
         refs_file = download_file(refs_url, f"verif_refs_{hour_str}.grib2")
         
         rtma_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/rtma/prod/rtma2p5.{today_str}/rtma2p5.t{hour_str.lower()}.2dvaranl_ndfd.grb2_wexp"
@@ -523,7 +523,7 @@ def main():
     day_counter_refs = 1
     
     for fhr in range(1, 49):
-        base_url = f"https://noaa-rrfs-pds.s3.amazonaws.com/rrfs_a/refs.{date_str_refs}/{run_cycle_refs}/enspost"
+        base_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/refs/para/refs.{date_str_refs}/{run_cycle_refs}/ensprod"
         
         # Using .mean. instead of .avrg. for instantaneous 2-meter grids
         filename = f"refs.t{run_cycle_refs}z.mean.f{fhr:02d}.conus.grib2"
