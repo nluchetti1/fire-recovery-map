@@ -308,106 +308,147 @@ def generate_daily_plot(recovery_grid, lats, lons, valid_time, day_idx, run_str,
     plt.close()
     print(f"Saved {filename}")
 
+def url_exists(url):
+    """Cheap HEAD probe so we can pick a cycle that is actually on NOMADS."""
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+    try:
+        r = requests.head(url, timeout=30, headers=headers, allow_redirects=True)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def pick_verification_date():
+    """
+    Find the most recent 00Z REFS cycle whose f12 is on NOMADS.
+    Probing f12 (not f01) guarantees the whole 01Z-12Z window is present.
+    """
+    now = datetime.utcnow()
+    for back in (0, 1, 2):
+        cand = (now - timedelta(days=back)).date()
+        probe = (
+            "https://nomads.ncep.noaa.gov/pub/data/nccf/com/refs/para/"
+            f"refs.{cand:%Y%m%d}/00/ensprod/refs.t00z.mean.f12.conus.grib2"
+        )
+        if url_exists(probe):
+            return cand
+        print(f"  -> REFS 00Z cycle {cand:%Y%m%d} not available on NOMADS.")
+    return None
+
+
 def run_verification_logic():
+    """
+    Verify REFS 00Z mean f01-f12 against RTMA analyses valid 01Z-12Z.
+
+    Nothing is written into IMAGE_DIR unless at least one hour verifies.
+    Combined with keep_files: true in the deploy step, a failed run can no
+    longer blank out the verification images already published to gh-pages.
+    """
     print("\n--- Starting Verification Suite (REFS 01Z - 12Z) ---")
-    today = datetime.utcnow().date()
-    today_str = today.strftime("%Y%m%d")
-    
+
+    verif_date = pick_verification_date()
+    if verif_date is None:
+        print("  -> No usable REFS 00Z cycle found. Keeping previously published images.")
+        return
+
+    today_str = verif_date.strftime("%Y%m%d")
+    print(f"Verifying REFS 00Z cycle: {today_str}")
+
     verif_files = []
-    
+
     for v_hour in range(1, 13):
         fhr = v_hour
         hour_str = f"{v_hour:02d}Z"
-        
+
         refs_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/refs/para/refs.{today_str}/00/ensprod/refs.t00z.mean.f{fhr:02d}.conus.grib2"
         refs_file = download_file(refs_url, f"verif_refs_{hour_str}.grib2")
-        
+
         rtma_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/rtma/prod/rtma2p5.{today_str}/rtma2p5.t{hour_str.lower()}.2dvaranl_ndfd.grb2_wexp"
         rtma_file = download_file(rtma_url, f"verif_rtma_{hour_str}.grib2")
-        
+
         if not refs_file or not rtma_file:
+            for leftover in (refs_file, rtma_file):
+                if leftover and os.path.exists(leftover):
+                    os.remove(leftover)
             continue
 
+        ds_refs = None
+        ds_rtma = None
         try:
             # Setup REFS Data
             ds_refs = xr.open_dataset(refs_file, engine='cfgrib', filter_by_keys={'typeOfLevel': 'heightAboveGround', 'level': 2})
             if not hasattr(ds_refs, 'latitude'):
                 print(f"  -> Skipping REFS Verification f{fhr:02d}: File is missing coordinate data.")
-                ds_refs.close()
                 continue
-                
+
             y_sl, x_sl = get_domain_slice(ds_refs, PLOT_EXTENT)
             ds_refs_sub = ds_refs.isel(y=y_sl, x=x_sl)
-            
+
             refs_lats = ds_refs_sub.latitude.values
             refs_lons_raw = ds_refs_sub.longitude.values
             refs_lons = np.where(refs_lons_raw > 180, refs_lons_raw - 360, refs_lons_raw)
             refs_moe, refs_mask = prepare_fuel_grid(FUEL_PATH, refs_lats, refs_lons)
-            
+
             t_data = get_var_data(ds_refs_sub, ['t2m', '2t', 't', 'temp'])
             d_data = get_var_data(ds_refs_sub, ['d2m', '2d', 'd', 'dewp'])
             rec_refs = generate_recovery_map(t_data, d_data, refs_moe, refs_mask)
-            
+
             # Setup RTMA Data
             ds_rtma = xr.open_dataset(rtma_file, engine='cfgrib')
             r_ysl, r_xsl = get_domain_slice(ds_rtma, PLOT_EXTENT)
             ds_rtma_sub = ds_rtma.isel(y=r_ysl, x=r_xsl)
-            
+
             r_lats = ds_rtma_sub.latitude.values
             r_lons = ds_rtma_sub.longitude.values
             r_lons = np.where(r_lons > 180, r_lons - 360, r_lons)
             r_moe, r_mask = prepare_fuel_grid(FUEL_PATH, r_lats, r_lons)
-            
+
             rtma_t_data = get_var_data(ds_rtma_sub, ['t2m', '2t', 't', 'temp'])
             rtma_d_data = get_var_data(ds_rtma_sub, ['d2m', '2d', 'd', 'dewp'])
             rec_rtma = generate_recovery_map(rtma_t_data, rtma_d_data, r_moe, r_mask)
-            
-            # Plot and save
+
+            # Plot and save. For 09Z this file IS images/verification_09z.png,
+            # which is the one embedded in index.html -- no copy needed.
             save_name = f"verification_{hour_str.lower()}.png"
             plot_verification(rec_refs, refs_lats, refs_lons, rec_rtma, r_lats, r_lons, f"{today_str} {hour_str[:2]}:00", save_name, hour_str)
             verif_files.append(os.path.join(IMAGE_DIR, save_name))
-            
-            if v_hour == 9:
-                shutil.copy(os.path.join(IMAGE_DIR, save_name), os.path.join(IMAGE_DIR, "verification_09z.png"))
-            
-            ds_refs.close()
-            ds_rtma.close()
-            
-        except Exception as e:
-            print(f"Verification Failed for {hour_str}: {e}")
-        finally:
-            if os.path.exists(refs_file): os.remove(refs_file)
-            if os.path.exists(rtma_file): os.remove(rtma_file)
 
+        except Exception as e:
+            print(f"Verification Failed for {hour_str}: {type(e).__name__}: {e}")
+        finally:
+            for ds in (ds_refs, ds_rtma):
+                if ds is not None:
+                    try:
+                        ds.close()
+                    except Exception:
+                        pass
+            for path in (refs_file, rtma_file):
+                if path and os.path.exists(path):
+                    os.remove(path)
+                # cfgrib leaves a sidecar index next to the GRIB file
+                if path and os.path.exists(path + '.idx'):
+                    os.remove(path + '.idx')
+
+    if not verif_files:
+        print("  -> No hours verified. Keeping previously published images and zip.")
+        return
+
+    print(f"  -> {len(verif_files)}/12 hours verified.")
+
+    # Only rewrite the zip when we actually have plots, otherwise we would
+    # truncate a good zip down to an empty one.
     zip_path = os.path.join(IMAGE_DIR, 'verification_suite.zip')
     try:
-        with zipfile.ZipFile(zip_path, 'w') as zipf:
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             for file in verif_files:
                 if os.path.exists(file):
                     zipf.write(file, os.path.basename(file))
+        print(f"  -> Wrote {zip_path} ({os.path.getsize(zip_path)} bytes)")
     except Exception as e:
-        pass
+        print(f"  -> Failed to build verification zip: {e}")
 
-def preserve_verification():
-    img_url = "https://nluchetti1.github.io/fire-recovery-map/images/verification_09z.png"
-    save_path = os.path.join(IMAGE_DIR, "verification_09z.png")
-    try:
-        r = requests.get(img_url)
-        if r.status_code == 200:
-            with open(save_path, 'wb') as f:
-                f.write(r.content)
-    except Exception:
-        pass
-
-    zip_url = "https://nluchetti1.github.io/fire-recovery-map/images/verification_suite.zip"
-    zip_save_path = os.path.join(IMAGE_DIR, "verification_suite.zip")
-    try:
-        r_zip = requests.get(zip_url)
-        if r_zip.status_code == 200:
-            with open(zip_save_path, 'wb') as f:
-                f.write(r_zip.content)
-    except Exception:
-        pass
 
 def main():
     os.makedirs(IMAGE_DIR, exist_ok=True)
@@ -707,10 +748,13 @@ def main():
             if os.path.exists(temp_file): os.remove(temp_file)
             if os.path.exists(rh_file): os.remove(rh_file)
 
+    # Verification needs RTMA analyses through 12Z, so it can only run
+    # after ~13Z. Earlier runs simply leave the published images alone --
+    # keep_files: true in the workflow preserves them.
     if now.hour >= 13:
         run_verification_logic()
     else:
-        preserve_verification()
+        print("\nBefore 13Z: skipping verification, keeping published images.")
 
 if __name__ == "__main__":
     import matplotlib
