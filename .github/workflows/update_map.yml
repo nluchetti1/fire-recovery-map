@@ -9,18 +9,22 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: recovery-map-deploy
+  cancel-in-progress: false
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout Code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.9'
+        python-version: '3.11'
 
     - name: Install System Dependencies
       run: |
@@ -36,15 +40,15 @@ jobs:
       run: |
         HOUR=$(date -u +%H)
         # Determine if we are waiting for the 00, 06, 12, or 18Z run based on the current hour
-        if [ "$HOUR" -ge 21 ] || [ "$HOUR" -lt 3 ]; then 
+        if [ "$HOUR" -ge 21 ] || [ "$HOUR" -lt 3 ]; then
           RUN_HOUR="18"
-          DATE=$(date -u -d "6 hours ago" +%Y%m%d) 
+          DATE=$(date -u -d "6 hours ago" +%Y%m%d)
         elif [ "$HOUR" -ge 15 ]; then RUN_HOUR="12"; DATE=$(date -u +%Y%m%d)
         elif [ "$HOUR" -ge 9 ];  then RUN_HOUR="06"; DATE=$(date -u +%Y%m%d)
         else RUN_HOUR="00"; DATE=$(date -u +%Y%m%d); fi
-        
+
         URL="https://nomads.ncep.noaa.gov/pub/data/nccf/com/refs/para/refs.${DATE}/${RUN_HOUR}/ensprod/refs.t${RUN_HOUR}z.mean.f01.conus.grib2"
-        
+
         echo "Checking NOMADS for REFS: $URL"
         for i in {1..12}; do
           if curl --output /dev/null --silent --head --fail "$URL"; then
@@ -60,8 +64,19 @@ jobs:
     - name: Run Map Script
       run: python scripts/main.py
 
+    - name: List generated images
+      run: |
+        echo "--- public/images ---"
+        ls -la public/images || echo "public/images MISSING"
+        echo "--- verification files ---"
+        ls -la public/images/verification_* 2>/dev/null || echo "no verification_* files this run"
+
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./public
+        # CRITICAL: without this, every deploy deletes anything on gh-pages
+        # that is not in ./public right now -- which is what was wiping the
+        # verification images whenever NOMADS 404'd.
+        keep_files: true
