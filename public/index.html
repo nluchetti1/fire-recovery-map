@@ -171,6 +171,23 @@
         .verif-btn-wrapper {
             margin-top: 15px;
         }
+
+        .verif-missing {
+            display: none;
+            margin-top: 15px;
+            padding: 20px;
+            border: 1px dashed #dc3545;
+            border-radius: 4px;
+            color: #842029;
+            background: #f8d7da;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        .verif-missing code {
+            background: rgba(0,0,0,0.06);
+            padding: 1px 4px;
+            border-radius: 3px;
+        }
     </style>
 </head>
 <body>
@@ -224,11 +241,17 @@
         <p>Comparison of Forecasted Recovery (REFS) vs. Observed Recovery (Derived from RTMA).</p>
         <p style="font-size: 0.9em; color: #666;">Valid at 0900 UTC (Approx 4:00 AM Local)</p>
         
-        <img class="verification-img" 
-             src="images/verification_09z.png" 
+        <img class="verification-img" id="verif-img"
+             src=""
              alt="REFS Verification Map"
-             onerror="this.parentElement.style.display='none'"> 
-             
+             onerror="verifFailed()">
+
+        <div id="verif-missing" class="verif-missing">
+            Verification image not published yet for this cycle.
+            Expected at <code>images/verification_09z.png</code> on the
+            <code>gh-pages</code> branch.
+        </div>
+
         <div class="verif-btn-wrapper">
             <button class="btn-blue" onclick="downloadVerifSuite()">Download Full 01Z-12Z Verification Suite</button>
         </div>
@@ -287,8 +310,24 @@
         }
     }
 
+    // GitHub Pages sits behind a CDN that will happily serve a stale PNG for
+    // hours. Load the verification image with a cache-busting query string so
+    // a fresh deploy shows up immediately.
+    function loadVerification() {
+        const img = document.getElementById('verif-img');
+        document.getElementById('verif-missing').style.display = 'none';
+        img.style.display = 'block';
+        img.src = 'images/verification_09z.png?t=' + Date.now();
+    }
+
+    function verifFailed() {
+        const img = document.getElementById('verif-img');
+        img.style.display = 'none';
+        document.getElementById('verif-missing').style.display = 'block';
+    }
+
     function downloadVerifSuite() {
-        window.open('images/verification_suite.zip', '_blank');
+        window.open('images/verification_suite.zip?t=' + Date.now(), '_blank');
     }
 
     function buildTimeline() {
@@ -346,6 +385,7 @@
 
     // Initialize map on load
     buildTimeline();
+    loadVerification();
 
     document.addEventListener('keydown', (e) => {
         const activeBox = document.querySelector('.time-box.active');
