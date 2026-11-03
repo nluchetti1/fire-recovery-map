@@ -47,7 +47,7 @@ jobs:
         elif [ "$HOUR" -ge 9 ];  then RUN_HOUR="06"; DATE=$(date -u +%Y%m%d)
         else RUN_HOUR="00"; DATE=$(date -u +%Y%m%d); fi
 
-        URL="https://nomads.ncep.noaa.gov/pub/data/nccf/com/refs/para/refs.${DATE}/${RUN_HOUR}/ensprod/refs.t${RUN_HOUR}z.mean.f01.conus.grib2"
+        URL="https://nomads.ncep.noaa.gov/pub/data/nccf/com/refs/prod/refs.${DATE}/${RUN_HOUR}/ensprod/refs.t${RUN_HOUR}z.mean.f01.conus.grib2"
 
         echo "Checking NOMADS for REFS: $URL"
         for i in {1..12}; do
