@@ -329,7 +329,7 @@ def pick_verification_date():
     for back in (0, 1, 2):
         cand = (now - timedelta(days=back)).date()
         probe = (
-            "https://nomads.ncep.noaa.gov/pub/data/nccf/com/refs/para/"
+            "https://nomads.ncep.noaa.gov/pub/data/nccf/com/refs/prod/"
             f"refs.{cand:%Y%m%d}/00/ensprod/refs.t00z.mean.f12.conus.grib2"
         )
         if url_exists(probe):
@@ -362,7 +362,7 @@ def run_verification_logic():
         fhr = v_hour
         hour_str = f"{v_hour:02d}Z"
 
-        refs_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/refs/para/refs.{today_str}/00/ensprod/refs.t00z.mean.f{fhr:02d}.conus.grib2"
+        refs_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/refs/prod/refs.{today_str}/00/ensprod/refs.t00z.mean.f{fhr:02d}.conus.grib2"
         refs_file = download_file(refs_url, f"verif_refs_{hour_str}.grib2")
 
         rtma_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/rtma/prod/rtma2p5.{today_str}/rtma2p5.t{hour_str.lower()}.2dvaranl_ndfd.grb2_wexp"
@@ -564,7 +564,7 @@ def main():
     day_counter_refs = 1
     
     for fhr in range(1, 49):
-        base_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/refs/para/refs.{date_str_refs}/{run_cycle_refs}/ensprod"
+        base_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/refs/prod/refs.{date_str_refs}/{run_cycle_refs}/ensprod"
         
         # Using .mean. instead of .avrg. for instantaneous 2-meter grids
         filename = f"refs.t{run_cycle_refs}z.mean.f{fhr:02d}.conus.grib2"
